@@ -682,14 +682,30 @@ def main() -> int:
     processed = 0
 
     # Wraps sync_playwright() inside Stealth().use_sync() for playwright-stealth >= 2.0.x
-    with Stealth().use_sync(sync_playwright()) as p:
-        # Launch Chromium visibly to allow debugging and seeing CAPTCHAs
-        browser = p.chromium.launch(headless=False)
+    # with Stealth().use_sync(sync_playwright()) as p:
+    #     # Launch Chromium visibly to allow debugging and seeing CAPTCHAs
+    #     browser = p.chromium.launch(headless=False)
         
-        context = browser.new_context(
-            viewport={"width": 1920, "height": 1080}
+    #     context = browser.new_context(
+    #         viewport={"width": 1920, "height": 1080}
+    #     )
+    #     page = context.new_page()
+    with Stealth().use_sync(sync_playwright()) as p:
+        browser = p.chromium.launch(
+            headless=False,
+            channel="chrome",
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--disable-infobars",
+                "--no-sandbox",
+            ],
+            ignore_default_args=["--enable-automation"]
         )
+        
+        context = browser.new_context(viewport={"width": 1920, "height": 1080})
         page = context.new_page()
+    
+    # Evasions are automatically injected before navigation!
         
         with open(args.out, "w", newline="", encoding="utf-8") as out_f:
             w = csv.DictWriter(out_f, fieldnames=OUT_FIELDS)
@@ -748,6 +764,7 @@ def main() -> int:
                         page.wait_for_timeout(1500) 
                         
                         html = page.content()
+                        print("Captch Solved.")
                         break
                 except PlaywrightTimeoutError:
                     print(f"[warn] timeout fetching: {url}", file=sys.stderr)
