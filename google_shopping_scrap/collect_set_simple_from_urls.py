@@ -690,8 +690,25 @@ def main() -> int:
     #         viewport={"width": 1920, "height": 1080}
     #     )
     #     page = context.new_page()
+    # with Stealth().use_sync(sync_playwright()) as p:
+    #     browser = p.chromium.launch(
+    #         headless=False,
+    #         channel="chrome",
+    #         args=[
+    #             "--disable-blink-features=AutomationControlled",
+    #             "--disable-infobars",
+    #             "--no-sandbox",
+    #         ],
+    #         ignore_default_args=["--enable-automation"]
+    #     )
+        
+    #     context = browser.new_context(viewport={"width": 1920, "height": 1080})
+    #     page = context.new_page()
+    
     with Stealth().use_sync(sync_playwright()) as p:
-        browser = p.chromium.launch(
+    # 1. We replace launch() and new_context() with launch_persistent_context()
+        context = p.chromium.launch_persistent_context(
+            user_data_dir="./my_chrome_profile",  # <-- Added user_data_dir here
             headless=False,
             channel="chrome",
             args=[
@@ -699,11 +716,13 @@ def main() -> int:
                 "--disable-infobars",
                 "--no-sandbox",
             ],
-            ignore_default_args=["--enable-automation"]
+            ignore_default_args=["--enable-automation"],
+            viewport={"width": 1920, "height": 1080} # <-- Moved viewport here
         )
         
-        context = browser.new_context(viewport={"width": 1920, "height": 1080})
-        page = context.new_page()
+        # 2. A persistent context automatically opens a blank tab on startup.
+        # We grab that first tab instead of opening a second one.
+        page = context.pages[0] if context.pages else context.new_page()
     
     # Evasions are automatically injected before navigation!
         
@@ -726,9 +745,7 @@ def main() -> int:
                         
                         print("Checking for Captcha...")
 
-                        recaptcha_frame = find_recaptcha_frame(page, "reCAPTCHA")
-
-                        if recaptcha_frame:
+                        if "sorry" in page.url:
                             print("reCAPTCHA challenge detected.")
                             # Existing handler may attempt the challenge. If it cannot
                             # complete it, skip this attempt rather than scraping a
@@ -793,7 +810,8 @@ def main() -> int:
                     out_f.flush()
                     print(f"[progress] wrote {wrote} rows (processed {processed} urls)")
 
-        browser.close()
+        # browser.close()
+        context.close()
 
     print(f"Saved {wrote} rows to: {args.out}")
     return 0
