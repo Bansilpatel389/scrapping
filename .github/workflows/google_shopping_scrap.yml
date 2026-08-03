@@ -1,0 +1,618 @@
+name: Google Shopping Workflow
+
+on:
+  workflow_dispatch:
+    inputs:
+      urls_file:
+        description: "Repo path to CSV of URLs. Example: google_shopping_scrap/data/urls.csv"
+        required: true
+        default: "google_shopping_scrap/data/urls.csv"
+        type: string
+
+      urls_per_job:
+        description: "How many URLs each parallel job processes"
+        required: true
+        default: "100"
+        type: string
+
+      max_parallel_jobs:
+        description: "Maximum number of parallel jobs"
+        required: true
+        default: "20"
+        type: string
+
+      flush_every:
+        description: "Flush progress every N output rows"
+        required: true
+        default: "25"
+        type: string
+
+
+permissions:
+  contents: read
+
+
+jobs:
+
+  # ============================================================
+  # PLAN
+  # Read CSV -> split into chunks -> build matrix
+  # ============================================================
+
+  plan:
+    runs-on: ubuntu-latest
+
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+
+      # --------------------------------------------------------
+      # Check input CSV
+      # --------------------------------------------------------
+
+      - name: Check URL file
+        run: |
+          FILE="${{ inputs.urls_file }}"
+
+          echo "Input urls_file: $FILE"
+
+          if [ ! -f "$FILE" ]; then
+            echo "ERROR: urls_file not found: $FILE"
+
+            echo "Repository contents:"
+            find . -maxdepth 3 -type f | sort
+
+            exit 1
+          fi
+
+          echo "Found URL file:"
+          ls -lh "$FILE"
+
+
+      # --------------------------------------------------------
+      # Split CSV + create matrix
+      # --------------------------------------------------------
+
+      - name: Chunk URL file + build matrix
+        id: matrix
+
+        run: |
+          python - <<'PY'
+
+          import csv
+          import json
+          import os
+          import math
+
+
+          # --------------------------------------------------
+          # Input settings
+          # --------------------------------------------------
+
+          in_path = "${{ inputs.urls_file }}"
+
+          urls_per_job = int(
+              "${{ inputs.urls_per_job }}" or "100"
+          )
+
+          max_jobs = int(
+              "${{ inputs.max_parallel_jobs }}" or "20"
+          )
+
+
+          # --------------------------------------------------
+          # Read CSV
+          # --------------------------------------------------
+
+          rows = []
+
+          with open(
+              in_path,
+              "r",
+              encoding="utf-8"
+          ) as f:
+
+              reader = csv.DictReader(f)
+
+              header = reader.fieldnames
+
+              print("CSV columns:", header)
+
+              if not header:
+                  raise SystemExit("CSV has no header.")
+
+              for row in reader:
+
+                  if row.get("product_url"):
+                      rows.append(row)
+
+
+          total = len(rows)
+
+
+          # --------------------------------------------------
+          # No URLs
+          # --------------------------------------------------
+
+          if total == 0:
+
+              print("No URLs found.")
+
+              with open(
+                  os.environ["GITHUB_OUTPUT"],
+                  "a",
+                  encoding="utf-8"
+              ) as out:
+
+                  out.write("matrix=[]\n")
+
+              raise SystemExit(0)
+
+
+          # --------------------------------------------------
+          # Calculate chunk size
+          # --------------------------------------------------
+
+          chunk = max(
+              1,
+              urls_per_job
+          )
+
+          jobs = math.ceil(
+              total / chunk
+          )
+
+
+          # --------------------------------------------------
+          # Respect max jobs
+          # --------------------------------------------------
+
+          if jobs > max_jobs:
+
+              chunk = math.ceil(
+                  total / max_jobs
+              )
+
+              jobs = math.ceil(
+                  total / chunk
+              )
+
+
+          print(f"Total URLs: {total}")
+          print(f"Jobs: {jobs}")
+          print(f"Chunk size: {chunk}")
+
+
+          # --------------------------------------------------
+          # Create chunks
+          # --------------------------------------------------
+
+          os.makedirs(
+              "chunks",
+              exist_ok=True
+          )
+
+          matrix = []
+
+          for i in range(jobs):
+
+              part = rows[
+                  i * chunk:
+                  (i + 1) * chunk
+              ]
+
+              path = f"chunks/urls_{i}.csv"
+
+              with open(
+                  path,
+                  "w",
+                  newline="",
+                  encoding="utf-8"
+              ) as out:
+
+                  writer = csv.DictWriter(
+                      out,
+                      fieldnames=header
+                  )
+
+                  writer.writeheader()
+                  writer.writerows(part)
+
+
+              print(
+                  f"{path}: {len(part)} URLs"
+              )
+
+              matrix.append({
+                  "job_index": i,
+                  "chunk_file": path
+              })
+
+
+          # --------------------------------------------------
+          # Output matrix
+          # --------------------------------------------------
+
+          with open(
+              os.environ["GITHUB_OUTPUT"],
+              "a",
+              encoding="utf-8"
+          ) as out:
+
+              out.write(
+                  f"matrix={json.dumps(matrix)}\n"
+              )
+
+
+          print(
+              f"Total URLs: {total} | "
+              f"jobs: {jobs} | "
+              f"chunk_size: {chunk}"
+          )
+
+          PY
+
+
+      # --------------------------------------------------------
+      # Upload chunks
+      # --------------------------------------------------------
+
+      - name: Upload URL chunks
+        uses: actions/upload-artifact@v4
+
+        with:
+          name: collect_set_chunks
+          path: chunks/urls_*.csv
+          retention-days: 2
+
+
+
+  # ============================================================
+  # PROCESS
+  # Each matrix job runs collect_set_simple_from_urls.py
+  # ============================================================
+
+  process:
+
+    needs: plan
+
+    if: needs.plan.outputs.matrix != '[]'
+
+    runs-on: ubuntu-latest
+
+
+    strategy:
+
+      fail-fast: false
+
+      matrix:
+        include: ${{ fromJson(needs.plan.outputs.matrix) }}
+
+
+    env:
+      ZYTE_API_KEY: ${{ secrets.ZYTE_API_KEY }}
+
+
+    steps:
+
+      # --------------------------------------------------------
+      # Checkout
+      # --------------------------------------------------------
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+
+      # --------------------------------------------------------
+      # Python
+      # --------------------------------------------------------
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+
+        with:
+          python-version: "3.11"
+
+
+      # --------------------------------------------------------
+      # Python dependencies
+      # --------------------------------------------------------
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r google_shopping_scrap/requirements.txt
+
+
+      # --------------------------------------------------------
+      # Playwright Chromium
+      # --------------------------------------------------------
+
+      - name: Install Playwright Chromium
+        run: |
+          python -m playwright install --with-deps chromium
+
+
+      # --------------------------------------------------------
+      # Xvfb
+      # --------------------------------------------------------
+
+      - name: Install Xvfb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+
+
+      # --------------------------------------------------------
+      # Download URL chunks
+      # --------------------------------------------------------
+
+      - name: Download chunks
+        uses: actions/download-artifact@v4
+
+        with:
+          name: collect_set_chunks
+          path: chunks
+
+
+      # --------------------------------------------------------
+      # Run collect_set_simple_from_urls.py
+      # --------------------------------------------------------
+
+      - name: Run collect_set_simple_from_urls.py
+
+        env:
+          DISPLAY: :99
+
+        run: |
+
+          JOB="${{ matrix.job_index }}"
+          IN="${{ matrix.chunk_file }}"
+
+          echo "====================================="
+          echo "Worker starting"
+          echo "Job index: $JOB"
+          echo "Input file: $IN"
+          echo "Display: $DISPLAY"
+          echo "====================================="
+
+
+          # --------------------------------------------------
+          # Start virtual display
+          # --------------------------------------------------
+
+          Xvfb :99 -screen 0 1920x1080x24 &
+
+          XVFB_PID=$!
+
+          echo "Xvfb PID: $XVFB_PID"
+
+          sleep 3
+
+
+          # --------------------------------------------------
+          # Run Playwright scraper
+          # --------------------------------------------------
+
+          python -u google_shopping_scrap/collect_set_simple_from_urls.py \
+            --urls "$IN" \
+            --out "collect_set_part_${JOB}.csv" \
+            --flush-every "${{ inputs.flush_every }}"
+
+
+      # --------------------------------------------------------
+      # Upload worker output
+      # --------------------------------------------------------
+
+      - name: Upload worker result
+
+        if: always()
+
+        uses: actions/upload-artifact@v4
+
+        with:
+          name: collect_set_part_${{ matrix.job_index }}
+
+          path: collect_set_part_${{ matrix.job_index }}.csv
+
+          if-no-files-found: warn
+
+          retention-days: 7
+
+
+
+  # ============================================================
+  # MERGE
+  # Merge successful worker CSV files
+  # ============================================================
+
+  merge:
+
+    needs:
+      - plan
+      - process
+
+    if: always() && needs.plan.outputs.matrix != '[]'
+
+    runs-on: ubuntu-latest
+
+
+    steps:
+
+      # --------------------------------------------------------
+      # Download all worker outputs
+      # --------------------------------------------------------
+
+      - name: Download worker results
+        uses: actions/download-artifact@v4
+
+        with:
+          pattern: collect_set_part_*
+          path: parts
+          merge-multiple: true
+
+
+      # --------------------------------------------------------
+      # Show downloaded files
+      # --------------------------------------------------------
+
+      - name: Show downloaded results
+        run: |
+          echo "Downloaded files:"
+          find parts -type f -maxdepth 2 -print || true
+
+
+      # --------------------------------------------------------
+      # Merge CSV files
+      # --------------------------------------------------------
+
+      - name: Merge worker results
+
+        run: |
+
+          python - <<'PY'
+
+          import glob
+          import csv
+
+
+          files = sorted(
+              glob.glob("parts/*.csv")
+          )
+
+
+          print("Part files:")
+          for file in files:
+              print(" -", file)
+
+
+          if not files:
+
+              raise SystemExit(
+                  "No worker output files found."
+              )
+
+
+          output_file = "collect_set_output.csv"
+
+          seen = set()
+
+          header = None
+
+
+          with open(
+              output_file,
+              "w",
+              newline="",
+              encoding="utf-8"
+          ) as output:
+
+
+              writer = None
+
+
+              for file in files:
+
+                  print(
+                      "Merging:",
+                      file
+                  )
+
+
+                  with open(
+                      file,
+                      "r",
+                      encoding="utf-8"
+                  ) as input_file:
+
+
+                      reader = csv.reader(
+                          input_file
+                      )
+
+
+                      current_header = next(
+                          reader,
+                          None
+                      )
+
+
+                      if not current_header:
+                          continue
+
+
+                      # --------------------------------------
+                      # Write header once
+                      # --------------------------------------
+
+                      if header is None:
+
+                          header = current_header
+
+                          writer = csv.writer(
+                              output
+                          )
+
+                          writer.writerow(
+                              header
+                          )
+
+
+                      # --------------------------------------
+                      # Write rows
+                      # --------------------------------------
+
+                      for row in reader:
+
+                          if not row:
+                              continue
+
+
+                          key = tuple(row)
+
+
+                          # Skip exact duplicate rows
+
+                          if key in seen:
+                              continue
+
+
+                          seen.add(key)
+
+                          writer.writerow(
+                              row
+                          )
+
+
+          print(
+              "Merged rows:",
+              len(seen)
+          )
+
+          print(
+              "Final output:",
+              output_file
+          )
+
+          PY
+
+
+      # --------------------------------------------------------
+      # Upload final merged output
+      # --------------------------------------------------------
+
+      - name: Upload final merged output
+
+        uses: actions/upload-artifact@v4
+
+        with:
+          name: collect_set_outputs
+
+          path: collect_set_output.csv
+
+          retention-days: 7
