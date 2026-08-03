@@ -707,10 +707,6 @@ def main() -> int:
                         
                         print("Checking for Captcha...")
 
-                        if "sorry" in page.url:
-                            print("Google block page detected. Retrying...")
-                            continue
-
                         recaptcha_frame = find_recaptcha_frame(page, "reCAPTCHA")
 
                         if recaptcha_frame:
@@ -731,7 +727,10 @@ def main() -> int:
                                 continue
                         else:
                             print("No reCAPTCHA detected. Continuing normally.")
-                    
+                            
+                        if "sorry" in page.url:
+                            print("Google block page detected. Retrying...")
+                            continue
                         # 1. Handle Google's EU Cookie Consent popup (ID: L2AGLb usually maps to "Accept All")
                         try:
                             consent_button = page.locator("button#L2AGLb")
