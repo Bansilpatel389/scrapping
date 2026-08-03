@@ -522,10 +522,11 @@ def detect_recaptcha(page):
                     print("No challenge 2 iframe found")
                     return False
                 locator = new_frame_2.locator("div.rc-doscaptcha-body-text")
-                locator.wait_for(state="visible", timeout=10000)
+                if locator.count() > 0 :
+                    locator.wait_for(state="visible", timeout=10000)
 
-                captcha_text = locator.inner_text()
-                print(captcha_text)
+                    captcha_text = locator.inner_text()
+                    print(captcha_text)
                 a_tag = new_frame_2.locator("a.rc-audiochallenge-tdownload-link")
                 if a_tag.count() > 0:
                     url = a_tag.get_attribute("href")
