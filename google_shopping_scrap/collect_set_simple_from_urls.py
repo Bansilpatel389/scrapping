@@ -601,7 +601,7 @@ def extract_all_products(html_content):
             'cid': data_cid,
             'gid': data_gid
         })
-        
+    print(f"Found {len(products)} products")
     return products
 
 
