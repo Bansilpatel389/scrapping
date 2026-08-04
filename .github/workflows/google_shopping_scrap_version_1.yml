@@ -1,4 +1,4 @@
-name: Google Shopping Workflow
+name: Google Shopping Workflow version 1
 
 on:
   workflow_dispatch:
