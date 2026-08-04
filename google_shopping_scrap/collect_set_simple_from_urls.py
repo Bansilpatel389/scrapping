@@ -662,6 +662,23 @@ def load_urls(url_args):
 
     return urls
 
+def print_public_ip():
+    try:
+        response = requests.get(
+            "https://api.ipify.org?format=json",
+            timeout=10
+        )
+        response.raise_for_status()
+
+        ip = response.json().get("ip")
+        print(f"[NETWORK] Public IP: {ip}", flush=True)
+
+        return ip
+
+    except Exception as e:
+        print(f"[NETWORK] Could not get public IP: {e}", flush=True)
+        return None
+    
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--urls", nargs="+", required=True, help="One or more URLs to process")
@@ -669,7 +686,7 @@ def main() -> int:
     ap.add_argument("--pending-out", default=None, help="CSV file for URLs that return no product data")
     ap.add_argument("--flush-every", type=int, default=25, help="Flush progress every N written rows")
     args = ap.parse_args()
-
+    print_public_ip()
     urls = load_urls(args.urls)
     print(f"Loaded {len(urls)} URLs")
 

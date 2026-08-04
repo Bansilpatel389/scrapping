@@ -1,2 +1,6 @@
-2026/08/04-11:17:35.367 794c6 Creating DB /home/cccadm/Bansil/google_shopping_26_08_03/scrapping/google_shopping_scrap/my_chrome_profile/Default/Session Storage since it was missing.
-2026/08/04-11:17:35.380 794c6 Reusing MANIFEST /home/cccadm/Bansil/google_shopping_26_08_03/scrapping/google_shopping_scrap/my_chrome_profile/Default/Session Storage/MANIFEST-000001
+2026/08/04-12:02:38.303 7a440 Reusing MANIFEST /home/cccadm/Bansil/google_shopping_26_08_03/scrapping/google_shopping_scrap/my_chrome_profile/Default/Session Storage/MANIFEST-000001
+2026/08/04-12:02:38.304 7a440 Recovering log #4
+2026/08/04-12:02:38.305 7a440 Reusing old log /home/cccadm/Bansil/google_shopping_26_08_03/scrapping/google_shopping_scrap/my_chrome_profile/Default/Session Storage/000004.log 
+2026/08/04-12:02:38.307 7a440 Delete type=2 #5
+2026/08/04-12:03:46.263 7a442 Level-0 table #6: started
+2026/08/04-12:03:46.338 7a442 Level-0 table #6: 371145 bytes OK
