@@ -200,7 +200,7 @@ jobs:
           name: collect_set_chunks
           path: chunks
 
-      - name: Run collect_set_simple_from_urls.py
+      - name: Run collect_set_simple_from_urls_selenium.py
         env:
           DISPLAY: :99
         run: |
@@ -236,7 +236,7 @@ jobs:
             fi
           fi
 
-          python -u google_shopping_scrap/collect_set_simple_from_urls.py \
+          python -u google_shopping_scrap/collect_set_simple_from_urls_selenium.py \
             --urls "$IN" \
             --out "collect_set_part_${JOB}.csv" \
             --pending-out "pending_${JOB}.csv" \
@@ -385,7 +385,7 @@ jobs:
 
             # Allow non-zero exit from scraper without killing the whole retry loop
             set +e
-            python -u google_shopping_scrap/collect_set_simple_from_urls.py \
+            python -u google_shopping_scrap/collect_set_simple_from_urls_selenium.py \
               --urls "$CURRENT_PENDING" \
               --out "$ROUND_OUT" \
               --pending-out "$ROUND_PENDING" \
