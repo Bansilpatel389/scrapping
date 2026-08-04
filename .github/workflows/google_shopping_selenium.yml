@@ -541,6 +541,423 @@
 #             retry_results/final_pending.csv
 #           retention-days: 7
 
+
+##version2 reject
+
+# name: Google Shopping Workflow selenium
+
+# on:
+#   workflow_dispatch:
+#     inputs:
+#       urls_file:
+#         description: "Repo path to CSV of URLs. Example: google_shopping_scrap/data/urls.csv"
+#         required: true
+#         default: "google_shopping_scrap/data/urls.csv"
+#         type: string
+
+#       urls_per_job:
+#         description: "MAX URLs per worker (never exceeded). Smaller when fewer URLs."
+#         required: true
+#         default: "10"
+#         type: string
+
+#       max_parallel_jobs:
+#         description: "Max concurrent workers per batch / retry wave"
+#         required: true
+#         default: "20"
+#         type: string
+
+#       flush_every:
+#         description: "Flush progress every N output rows"
+#         required: true
+#         default: "25"
+#         type: string
+
+#       max_pending_rounds:
+#         description: "Max retry waves per batch until pending empty (hard-capped at 20)"
+#         required: true
+#         default: "20"
+#         type: string
+
+# permissions:
+#   contents: read
+
+# # ---------------------------------------------------------------------------
+# # Chunking rules (used everywhere):
+# #   max_per_job = urls_per_job          # ceiling, never more
+# #   max_jobs    = max_parallel_jobs
+# #   chunk       = min(max_per_job, ceil(n / max_jobs))
+# #   jobs        = ceil(n / chunk)
+# #
+# # Batching:
+# #   batch_size  = max_jobs * max_per_job   # e.g. 20*10 = 200
+# #   Process batch 1 fully (including retries) before batch 2, etc.
+# # ---------------------------------------------------------------------------
+
+# jobs:
+
+#   # ============================================================
+#   # LOAD — read full URL list once
+#   # ============================================================
+
+#   load:
+#     runs-on: ubuntu-latest
+#     outputs:
+#       total: ${{ steps.load.outputs.total }}
+#     steps:
+#       - uses: actions/checkout@v4
+
+#       - name: Load and normalize URL list
+#         id: load
+#         run: |
+#           python - <<'PY'
+#           import csv, os, sys
+
+#           in_path = "${{ inputs.urls_file }}"
+#           if not os.path.isfile(in_path):
+#               print(f"ERROR: urls_file not found: {in_path}")
+#               for root, dirs, files in os.walk("."):
+#                   if root.count(os.sep) > 3:
+#                       continue
+#                   for f in files:
+#                       print(os.path.join(root, f))
+#               sys.exit(1)
+
+#           seen, urls = set(), []
+#           with open(in_path, "r", encoding="utf-8-sig") as f:
+#               reader = csv.DictReader(f)
+#               print("CSV columns:", reader.fieldnames)
+#               for row in reader:
+#                   u = (row.get("product_url") or row.get("url") or "").strip()
+#                   if u and u.startswith(("http://", "https://")) and u not in seen:
+#                       seen.add(u)
+#                       urls.append(u)
+
+#           os.makedirs("url_data", exist_ok=True)
+#           with open("url_data/all_urls.csv", "w", newline="", encoding="utf-8") as f:
+#               w = csv.writer(f)
+#               w.writerow(["product_url"])
+#               w.writerows([[u] for u in urls])
+
+#           print(f"Total unique URLs: {len(urls)}")
+#           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as o:
+#               o.write(f"total={len(urls)}\n")
+#           PY
+
+#       - uses: actions/upload-artifact@v4
+#         with:
+#           name: all_urls
+#           path: url_data/all_urls.csv
+#           retention-days: 2
+
+#   # ============================================================
+#   # ORCHESTRATOR
+#   # Batches of (max_jobs * urls_per_job). Each batch:
+#   #   1) split with max-per-job rule
+#   #   2) run concurrent scraper pool
+#   #   3) retry pending in waves (parallel pool) until empty or 20 waves
+#   # Then next batch.
+#   # ============================================================
+
+#   orchestrator:
+#     needs: load
+#     if: needs.load.outputs.total != '0' && needs.load.outputs.total != ''
+#     runs-on: ubuntu-latest
+#     timeout-minutes: 360
+#     env:
+#       ZYTE_API_KEY: ${{ secrets.ZYTE_API_KEY }}
+#       HEADLESS: "1"
+#       BROWSER_ACCEPT_LANGUAGE: "en-US,en;q=0.9"
+#       BROWSER_TIMEZONE: "America/New_York"
+#     steps:
+#       - uses: actions/checkout@v4
+
+#       - uses: actions/setup-python@v5
+#         with:
+#           python-version: "3.11"
+#           cache: "pip"
+#           cache-dependency-path: google_shopping_scrap/requirements.txt
+
+#       - name: Install Python dependencies
+#         run: |
+#           python -m pip install --upgrade pip
+#           pip install -r google_shopping_scrap/requirements.txt
+
+#       - name: Setup Chrome
+#         id: setup-chrome
+#         uses: browser-actions/setup-chrome@v2
+#         with:
+#           chrome-version: stable
+#           install-dependencies: true
+
+#       - name: Export Chrome path
+#         run: |
+#           echo "CHROME_BIN=${{ steps.setup-chrome.outputs.chrome-path }}" >> "$GITHUB_ENV"
+#           echo "CHROME_PATH=${{ steps.setup-chrome.outputs.chrome-path }}" >> "$GITHUB_ENV"
+#           "${{ steps.setup-chrome.outputs.chrome-path }}" --version
+
+#       - name: Install Xvfb
+#         run: |
+#           sudo apt-get update -qq
+#           sudo apt-get install -y -qq xvfb
+
+#       - uses: actions/download-artifact@v4
+#         with:
+#           name: all_urls
+#           path: url_data
+
+#       - name: Run batched scrape + retry waves
+#         env:
+#           DISPLAY: :99
+#         run: |
+#           set -euo pipefail
+
+#           MAX_PER_JOB="${{ inputs.urls_per_job }}"
+#           MAX_JOBS="${{ inputs.max_parallel_jobs }}"
+#           FLUSH_EVERY="${{ inputs.flush_every }}"
+#           MAX_ROUNDS="${{ inputs.max_pending_rounds }}"
+
+#           # Hard-cap retry waves at 20
+#           if [ "$MAX_ROUNDS" -gt 20 ]; then MAX_ROUNDS=20; fi
+#           if [ "$MAX_ROUNDS" -lt 1 ]; then MAX_ROUNDS=1; fi
+
+#           Xvfb :99 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset &
+#           XVFB_PID=$!
+#           trap 'kill $XVFB_PID 2>/dev/null || true' EXIT
+#           sleep 2
+
+#           mkdir -p outputs retry_results work
+
+#           python -u - <<'PY'
+#           import csv
+#           import math
+#           import os
+#           import subprocess
+#           import time
+#           from pathlib import Path
+
+#           MAX_PER_JOB = max(1, int(os.environ.get("MAX_PER_JOB") or "${{ inputs.urls_per_job }}" or "10"))
+#           MAX_JOBS = max(1, int(os.environ.get("MAX_JOBS") or "${{ inputs.max_parallel_jobs }}" or "20"))
+#           FLUSH_EVERY = os.environ.get("FLUSH_EVERY") or "${{ inputs.flush_every }}" or "25"
+#           MAX_ROUNDS = min(20, max(1, int(os.environ.get("MAX_ROUNDS") or "${{ inputs.max_pending_rounds }}" or "20")))
+#           BATCH_SIZE = MAX_JOBS * MAX_PER_JOB  # e.g. 20*10 = 200
+
+#           SCRAPER = "google_shopping_scrap/collect_set_simple_from_urls_selenium.py"
+#           ALL_URLS = "url_data/all_urls.csv"
+#           OUT_DIR = Path("outputs")
+#           RETRY_DIR = Path("retry_results")
+#           WORK = Path("work")
+#           OUT_DIR.mkdir(exist_ok=True)
+#           RETRY_DIR.mkdir(exist_ok=True)
+
+#           def load_urls(path):
+#               urls = []
+#               seen = set()
+#               with open(path, "r", encoding="utf-8-sig") as f:
+#                   for row in csv.DictReader(f):
+#                       u = (row.get("product_url") or row.get("url") or "").strip()
+#                       if u and u not in seen:
+#                           seen.add(u)
+#                           urls.append(u)
+#               return urls
+
+#           def write_url_csv(path, urls):
+#               with open(path, "w", newline="", encoding="utf-8") as f:
+#                   w = csv.writer(f)
+#                   w.writerow(["product_url"])
+#                   w.writerows([[u] for u in urls])
+
+#           def chunk_urls(urls):
+#               """urls_per_job is MAX; spread across up to MAX_JOBS workers."""
+#               n = len(urls)
+#               if n == 0:
+#                   return []
+#               chunk = min(MAX_PER_JOB, max(1, math.ceil(n / MAX_JOBS)))
+#               jobs = math.ceil(n / chunk)
+#               parts = []
+#               for i in range(jobs):
+#                   parts.append(urls[i * chunk : (i + 1) * chunk])
+#               return parts
+
+#           def run_pool(url_groups, tag):
+#               """Run scraper on each group with at most MAX_JOBS concurrent processes."""
+#               WORK.mkdir(exist_ok=True)
+#               # clean previous wave work files
+#               for p in WORK.glob("*"):
+#                   p.unlink()
+
+#               jobs = []
+#               for i, group in enumerate(url_groups):
+#                   chunk_path = WORK / f"chunk_{i}.csv"
+#                   out_path = WORK / f"out_{i}.csv"
+#                   pend_path = WORK / f"pend_{i}.csv"
+#                   log_path = WORK / f"log_{i}.txt"
+#                   write_url_csv(chunk_path, group)
+#                   jobs.append({
+#                       "i": i,
+#                       "chunk": str(chunk_path),
+#                       "out": str(out_path),
+#                       "pend": str(pend_path),
+#                       "log": str(log_path),
+#                       "n": len(group),
+#                   })
+
+#               print(f"  [{tag}] {len(jobs)} chunks, pool size {MAX_JOBS}")
+#               for j in jobs:
+#                   print(f"    chunk {j['i']}: {j['n']} URLs")
+
+#               queue = list(jobs)
+#               active = []  # (proc, logf, meta)
+
+#               def start(meta):
+#                   logf = open(meta["log"], "w")
+#                   cmd = [
+#                       "python", "-u", SCRAPER,
+#                       "--urls", meta["chunk"],
+#                       "--out", meta["out"],
+#                       "--pending-out", meta["pend"],
+#                       "--flush-every", str(FLUSH_EVERY),
+#                   ]
+#                   proc = subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT)
+#                   return proc, logf, meta
+
+#               while queue or active:
+#                   while queue and len(active) < MAX_JOBS:
+#                       meta = queue.pop(0)
+#                       print(f"  [{tag}] start chunk {meta['i']} ({meta['n']} URLs)")
+#                       active.append(start(meta))
+#                   time.sleep(2)
+#                   still = []
+#                   for proc, logf, meta in active:
+#                       rc = proc.poll()
+#                       if rc is None:
+#                           still.append((proc, logf, meta))
+#                       else:
+#                           logf.close()
+#                           print(f"  [{tag}] chunk {meta['i']} done rc={rc}")
+#                   active = still
+
+#               # Collect success rows + pending
+#               success_rows = []
+#               header = None
+#               pending = []
+#               seen_p = set()
+#               seen_r = set()
+
+#               for meta in jobs:
+#                   out_p = Path(meta["out"])
+#                   if out_p.is_file():
+#                       with open(out_p, "r", encoding="utf-8-sig") as f:
+#                           reader = csv.reader(f)
+#                           h = next(reader, None)
+#                           if h and header is None:
+#                               header = h
+#                           for row in reader:
+#                               if not row:
+#                                   continue
+#                               key = tuple(row)
+#                               if key in seen_r:
+#                                   continue
+#                               seen_r.add(key)
+#                               success_rows.append(row)
+#                   pend_p = Path(meta["pend"])
+#                   if pend_p.is_file():
+#                       with open(pend_p, "r", encoding="utf-8-sig") as f:
+#                           for row in csv.DictReader(f):
+#                               u = (row.get("product_url") or row.get("url") or "").strip()
+#                               if u and u not in seen_p:
+#                                   seen_p.add(u)
+#                                   pending.append(u)
+
+#               return header, success_rows, pending
+
+#           def append_success(header, rows, dest):
+#               dest = Path(dest)
+#               write_header = not dest.is_file()
+#               with open(dest, "a", newline="", encoding="utf-8") as f:
+#                   w = csv.writer(f)
+#                   if write_header:
+#                       w.writerow(header or [
+#                           "url", "name", "image_url", "price",
+#                           "seller", "pid", "cid", "gid",
+#                       ])
+#                   for row in rows:
+#                       w.writerow(row)
+
+#           # ---- main: batch over all URLs ----
+#           all_urls = load_urls(ALL_URLS)
+#           print(f"Total URLs: {len(all_urls)}")
+#           print(f"MAX_PER_JOB={MAX_PER_JOB} MAX_JOBS={MAX_JOBS} BATCH_SIZE={BATCH_SIZE} MAX_ROUNDS={MAX_ROUNDS}")
+
+#           global_success = OUT_DIR / "collect_set_output.csv"
+#           if global_success.exists():
+#               global_success.unlink()
+
+#           batch_idx = 0
+#           offset = 0
+#           while offset < len(all_urls):
+#               batch = all_urls[offset : offset + BATCH_SIZE]
+#               offset += len(batch)
+#               batch_idx += 1
+#               print("=" * 60)
+#               print(f"BATCH {batch_idx}: {len(batch)} URLs (offset now {offset}/{len(all_urls)})")
+#               print("=" * 60)
+
+#               # --- first pass on this batch ---
+#               groups = chunk_urls(batch)
+#               header, rows, pending = run_pool(groups, tag=f"batch{batch_idx}-pass")
+#               append_success(header, rows, global_success)
+#               print(f"BATCH {batch_idx} pass: {len(rows)} success rows, {len(pending)} pending")
+
+#               # --- retry waves until pending empty or MAX_ROUNDS ---
+#               for wave in range(1, MAX_ROUNDS + 1):
+#                   if not pending:
+#                       print(f"BATCH {batch_idx}: pending empty after wave {wave - 1}")
+#                       break
+#                   print(f"BATCH {batch_idx} RETRY WAVE {wave}/{MAX_ROUNDS}: {len(pending)} pending")
+#                   groups = chunk_urls(pending)
+#                   header, rows, pending = run_pool(groups, tag=f"batch{batch_idx}-wave{wave}")
+#                   append_success(header, rows, global_success)
+
+#                   wave_pend_path = RETRY_DIR / f"pending_batch{batch_idx}_wave{wave}.csv"
+#                   write_url_csv(wave_pend_path, pending)
+#                   print(f"BATCH {batch_idx} wave {wave}: {len(rows)} success, {len(pending)} still pending")
+#               else:
+#                   # for-else: completed all waves without break
+#                   if pending:
+#                       print(f"BATCH {batch_idx}: hit MAX_ROUNDS with {len(pending)} still pending")
+
+#               # carry leftover pending into a final file (accumulate across batches)
+#               if pending:
+#                   final_path = RETRY_DIR / "final_pending.csv"
+#                   existing = load_urls(final_path) if final_path.is_file() else []
+#                   merged = existing + [u for u in pending if u not in set(existing)]
+#                   write_url_csv(final_path, merged)
+
+#           # ensure files exist for upload
+#           if not global_success.is_file():
+#               append_success(None, [], global_success)
+#           final_path = RETRY_DIR / "final_pending.csv"
+#           if not final_path.is_file():
+#               write_url_csv(final_path, [])
+
+#           print("ORCHESTRATOR DONE")
+#           print(f"  output: {global_success}")
+#           print(f"  final_pending: {final_path}")
+#           PY
+
+#       - name: Upload outputs
+#         if: always()
+#         uses: actions/upload-artifact@v4
+#         with:
+#           name: collect_set_outputs
+#           path: |
+#             outputs/collect_set_output.csv
+#             retry_results/final_pending.csv
+#             retry_results/pending_batch*_wave*.csv
+#           if-no-files-found: warn
+#           retention-days: 7
+
 name: Google Shopping Workflow selenium
 
 on:
@@ -551,52 +968,42 @@ on:
         required: true
         default: "google_shopping_scrap/data/urls.csv"
         type: string
-
       urls_per_job:
-        description: "MAX URLs per worker (never exceeded). Smaller when fewer URLs."
+        description: "MAX URLs per worker (never exceeded)"
         required: true
         default: "10"
         type: string
-
       max_parallel_jobs:
-        description: "Max concurrent workers per batch / retry wave"
+        description: "Max concurrent matrix jobs"
         required: true
         default: "20"
         type: string
-
       flush_every:
         description: "Flush progress every N output rows"
         required: true
         default: "25"
         type: string
-
       max_pending_rounds:
-        description: "Max retry waves per batch until pending empty (hard-capped at 20)"
+        description: "Max retry waves (1 = first pass only, 2 = one retry wave, …). Hard-capped at 3 in this workflow."
         required: true
-        default: "20"
+        default: "2"
         type: string
 
 permissions:
   contents: read
 
 # ---------------------------------------------------------------------------
-# Chunking rules (used everywhere):
-#   max_per_job = urls_per_job          # ceiling, never more
+# Chunking rules (same as original):
+#   max_per_job = urls_per_job
 #   max_jobs    = max_parallel_jobs
-#   chunk       = min(max_per_job, ceil(n / max_jobs))
-#   jobs        = ceil(n / chunk)
-#
-# Batching:
-#   batch_size  = max_jobs * max_per_job   # e.g. 20*10 = 200
-#   Process batch 1 fully (including retries) before batch 2, etc.
+#   chunk_size  = min(max_per_job, ceil(n / max_jobs))
+#   jobs        = ceil(n / chunk_size)
 # ---------------------------------------------------------------------------
 
 jobs:
-
   # ============================================================
-  # LOAD — read full URL list once
+  # 1. LOAD — read full URL list once
   # ============================================================
-
   load:
     runs-on: ubuntu-latest
     outputs:
@@ -609,15 +1016,9 @@ jobs:
         run: |
           python - <<'PY'
           import csv, os, sys
-
           in_path = "${{ inputs.urls_file }}"
           if not os.path.isfile(in_path):
               print(f"ERROR: urls_file not found: {in_path}")
-              for root, dirs, files in os.walk("."):
-                  if root.count(os.sep) > 3:
-                      continue
-                  for f in files:
-                      print(os.path.join(root, f))
               sys.exit(1)
 
           seen, urls = set(), []
@@ -648,24 +1049,87 @@ jobs:
           retention-days: 2
 
   # ============================================================
-  # ORCHESTRATOR
-  # Batches of (max_jobs * urls_per_job). Each batch:
-  #   1) split with max-per-job rule
-  #   2) run concurrent scraper pool
-  #   3) retry pending in waves (parallel pool) until empty or 20 waves
-  # Then next batch.
+  # 2. PLAN — split into chunks + build matrix (first pass)
   # ============================================================
-
-  orchestrator:
+  plan:
     needs: load
     if: needs.load.outputs.total != '0' && needs.load.outputs.total != ''
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    outputs:
+      matrix: ${{ steps.chunk.outputs.matrix }}
+      chunk_count: ${{ steps.chunk.outputs.chunk_count }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: all_urls
+          path: url_data
+
+      - name: Split into chunks
+        id: chunk
+        run: |
+          python - <<'PY'
+          import csv, json, math, os
+          from pathlib import Path
+
+          MAX_PER_JOB = max(1, int("${{ inputs.urls_per_job }}" or "10"))
+          MAX_JOBS    = max(1, int("${{ inputs.max_parallel_jobs }}" or "20"))
+
+          urls = []
+          with open("url_data/all_urls.csv", encoding="utf-8-sig") as f:
+              for row in csv.DictReader(f):
+                  u = (row.get("product_url") or row.get("url") or "").strip()
+                  if u:
+                      urls.append(u)
+
+          n = len(urls)
+          chunk_size = min(MAX_PER_JOB, max(1, math.ceil(n / MAX_JOBS)))
+          chunks = [urls[i:i + chunk_size] for i in range(0, n, chunk_size)]
+
+          Path("chunks").mkdir(exist_ok=True)
+          matrix = []
+          for i, group in enumerate(chunks):
+              path = f"chunks/urls_{i}.csv"
+              with open(path, "w", newline="", encoding="utf-8") as f:
+                  w = csv.writer(f)
+                  w.writerow(["product_url"])
+                  w.writerows([[u] for u in group])
+              matrix.append({"index": i, "chunk": path, "count": len(group)})
+
+          print(f"Created {len(matrix)} chunks (≈{chunk_size} URLs each)")
+          for m in matrix:
+              print(f"  chunk {m['index']}: {m['count']} URLs → {m['chunk']}")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as o:
+              o.write(f"matrix={json.dumps({'include': matrix})}\n")
+              o.write(f"chunk_count={len(matrix)}\n")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chunks-pass1
+          path: chunks/
+          retention-days: 2
+
+  # ============================================================
+  # 3. PROCESS — matrix job (one visible job per chunk)
+  # ============================================================
+  process:
+    needs: plan
+    if: needs.plan.outputs.chunk_count != '0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ fromJSON(inputs.max_parallel_jobs) }}
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
-      ZYTE_API_KEY: ${{ secrets.ZYTE_API_KEY }}
       HEADLESS: "1"
       BROWSER_ACCEPT_LANGUAGE: "en-US,en;q=0.9"
       BROWSER_TIMEZONE: "America/New_York"
+      AUTOMATION_BLOCK_WAIT: "15"
+      AUTOMATION_BLOCK_MAX: "2"
+    name: process(${{ matrix.index }}, ${{ matrix.chunk }})
     steps:
       - uses: actions/checkout@v4
 
@@ -691,7 +1155,6 @@ jobs:
         run: |
           echo "CHROME_BIN=${{ steps.setup-chrome.outputs.chrome-path }}" >> "$GITHUB_ENV"
           echo "CHROME_PATH=${{ steps.setup-chrome.outputs.chrome-path }}" >> "$GITHUB_ENV"
-          "${{ steps.setup-chrome.outputs.chrome-path }}" --version
 
       - name: Install Xvfb
         run: |
@@ -700,257 +1163,377 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: all_urls
-          path: url_data
+          name: chunks-pass1
+          path: chunks
 
-      - name: Run batched scrape + retry waves
+      - name: Run scraper
         env:
           DISPLAY: :99
         run: |
           set -euo pipefail
-
-          MAX_PER_JOB="${{ inputs.urls_per_job }}"
-          MAX_JOBS="${{ inputs.max_parallel_jobs }}"
-          FLUSH_EVERY="${{ inputs.flush_every }}"
-          MAX_ROUNDS="${{ inputs.max_pending_rounds }}"
-
-          # Hard-cap retry waves at 20
-          if [ "$MAX_ROUNDS" -gt 20 ]; then MAX_ROUNDS=20; fi
-          if [ "$MAX_ROUNDS" -lt 1 ]; then MAX_ROUNDS=1; fi
-
           Xvfb :99 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset &
           XVFB_PID=$!
           trap 'kill $XVFB_PID 2>/dev/null || true' EXIT
           sleep 2
 
-          mkdir -p outputs retry_results work
+          mkdir -p outputs
+          python -u google_shopping_scrap/collect_set_simple_from_urls_selenium.py \
+            --urls "${{ matrix.chunk }}" \
+            --out  "outputs/out_${{ matrix.index }}.csv" \
+            --pending-out "outputs/pend_${{ matrix.index }}.csv" \
+            --flush-every "${{ inputs.flush_every }}"
 
-          python -u - <<'PY'
-          import csv
-          import math
-          import os
-          import subprocess
-          import time
+      - name: Upload chunk results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: result-pass1-${{ matrix.index }}
+          path: |
+            outputs/out_${{ matrix.index }}.csv
+            outputs/pend_${{ matrix.index }}.csv
+          if-no-files-found: warn
+          retention-days: 5
+
+  # ============================================================
+  # 4. AGGREGATE (after first pass) — merge + decide if retry needed
+  # ============================================================
+  aggregate:
+    needs: process
+    if: always()
+    runs-on: ubuntu-latest
+    outputs:
+      pending_count: ${{ steps.merge.outputs.pending_count }}
+      do_retry: ${{ steps.merge.outputs.do_retry }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all pass-1 results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: result-pass1-*
+          path: all_results
+          merge-multiple: true
+
+      - name: Merge success + pending
+        id: merge
+        run: |
+          python - <<'PY'
+          import csv, os
           from pathlib import Path
 
-          MAX_PER_JOB = max(1, int(os.environ.get("MAX_PER_JOB") or "${{ inputs.urls_per_job }}" or "10"))
-          MAX_JOBS = max(1, int(os.environ.get("MAX_JOBS") or "${{ inputs.max_parallel_jobs }}" or "20"))
-          FLUSH_EVERY = os.environ.get("FLUSH_EVERY") or "${{ inputs.flush_every }}" or "25"
-          MAX_ROUNDS = min(20, max(1, int(os.environ.get("MAX_ROUNDS") or "${{ inputs.max_pending_rounds }}" or "20")))
-          BATCH_SIZE = MAX_JOBS * MAX_PER_JOB  # e.g. 20*10 = 200
+          out_dir = Path("wave1")
+          out_dir.mkdir(exist_ok=True)
 
-          SCRAPER = "google_shopping_scrap/collect_set_simple_from_urls_selenium.py"
-          ALL_URLS = "url_data/all_urls.csv"
-          OUT_DIR = Path("outputs")
-          RETRY_DIR = Path("retry_results")
-          WORK = Path("work")
-          OUT_DIR.mkdir(exist_ok=True)
-          RETRY_DIR.mkdir(exist_ok=True)
+          header = None
+          success_rows, seen_r = [], set()
+          pending, seen_p = [], set()
 
-          def load_urls(path):
-              urls = []
-              seen = set()
-              with open(path, "r", encoding="utf-8-sig") as f:
-                  for row in csv.DictReader(f):
-                      u = (row.get("product_url") or row.get("url") or "").strip()
-                      if u and u not in seen:
-                          seen.add(u)
-                          urls.append(u)
-              return urls
-
-          def write_url_csv(path, urls):
-              with open(path, "w", newline="", encoding="utf-8") as f:
-                  w = csv.writer(f)
-                  w.writerow(["product_url"])
-                  w.writerows([[u] for u in urls])
-
-          def chunk_urls(urls):
-              """urls_per_job is MAX; spread across up to MAX_JOBS workers."""
-              n = len(urls)
-              if n == 0:
-                  return []
-              chunk = min(MAX_PER_JOB, max(1, math.ceil(n / MAX_JOBS)))
-              jobs = math.ceil(n / chunk)
-              parts = []
-              for i in range(jobs):
-                  parts.append(urls[i * chunk : (i + 1) * chunk])
-              return parts
-
-          def run_pool(url_groups, tag):
-              """Run scraper on each group with at most MAX_JOBS concurrent processes."""
-              WORK.mkdir(exist_ok=True)
-              # clean previous wave work files
-              for p in WORK.glob("*"):
-                  p.unlink()
-
-              jobs = []
-              for i, group in enumerate(url_groups):
-                  chunk_path = WORK / f"chunk_{i}.csv"
-                  out_path = WORK / f"out_{i}.csv"
-                  pend_path = WORK / f"pend_{i}.csv"
-                  log_path = WORK / f"log_{i}.txt"
-                  write_url_csv(chunk_path, group)
-                  jobs.append({
-                      "i": i,
-                      "chunk": str(chunk_path),
-                      "out": str(out_path),
-                      "pend": str(pend_path),
-                      "log": str(log_path),
-                      "n": len(group),
-                  })
-
-              print(f"  [{tag}] {len(jobs)} chunks, pool size {MAX_JOBS}")
-              for j in jobs:
-                  print(f"    chunk {j['i']}: {j['n']} URLs")
-
-              queue = list(jobs)
-              active = []  # (proc, logf, meta)
-
-              def start(meta):
-                  logf = open(meta["log"], "w")
-                  cmd = [
-                      "python", "-u", SCRAPER,
-                      "--urls", meta["chunk"],
-                      "--out", meta["out"],
-                      "--pending-out", meta["pend"],
-                      "--flush-every", str(FLUSH_EVERY),
-                  ]
-                  proc = subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT)
-                  return proc, logf, meta
-
-              while queue or active:
-                  while queue and len(active) < MAX_JOBS:
-                      meta = queue.pop(0)
-                      print(f"  [{tag}] start chunk {meta['i']} ({meta['n']} URLs)")
-                      active.append(start(meta))
-                  time.sleep(2)
-                  still = []
-                  for proc, logf, meta in active:
-                      rc = proc.poll()
-                      if rc is None:
-                          still.append((proc, logf, meta))
-                      else:
-                          logf.close()
-                          print(f"  [{tag}] chunk {meta['i']} done rc={rc}")
-                  active = still
-
-              # Collect success rows + pending
-              success_rows = []
-              header = None
-              pending = []
-              seen_p = set()
-              seen_r = set()
-
-              for meta in jobs:
-                  out_p = Path(meta["out"])
-                  if out_p.is_file():
-                      with open(out_p, "r", encoding="utf-8-sig") as f:
+          for root, _, files in os.walk("all_results"):
+              for name in files:
+                  path = Path(root) / name
+                  if name.startswith("out_") and name.endswith(".csv"):
+                      with open(path, encoding="utf-8-sig") as f:
                           reader = csv.reader(f)
                           h = next(reader, None)
                           if h and header is None:
                               header = h
                           for row in reader:
-                              if not row:
-                                  continue
+                              if not row: continue
                               key = tuple(row)
-                              if key in seen_r:
-                                  continue
+                              if key in seen_r: continue
                               seen_r.add(key)
                               success_rows.append(row)
-                  pend_p = Path(meta["pend"])
-                  if pend_p.is_file():
-                      with open(pend_p, "r", encoding="utf-8-sig") as f:
+                  elif name.startswith("pend_") and name.endswith(".csv"):
+                      with open(path, encoding="utf-8-sig") as f:
                           for row in csv.DictReader(f):
                               u = (row.get("product_url") or row.get("url") or "").strip()
                               if u and u not in seen_p:
                                   seen_p.add(u)
                                   pending.append(u)
 
-              return header, success_rows, pending
+          success_path = out_dir / "success_wave1.csv"
+          with open(success_path, "w", newline="", encoding="utf-8") as f:
+              w = csv.writer(f)
+              w.writerow(header or ["url","name","image_url","price","seller","pid","cid","gid"])
+              w.writerows(success_rows)
 
-          def append_success(header, rows, dest):
-              dest = Path(dest)
-              write_header = not dest.is_file()
-              with open(dest, "a", newline="", encoding="utf-8") as f:
-                  w = csv.writer(f)
-                  if write_header:
-                      w.writerow(header or [
-                          "url", "name", "image_url", "price",
-                          "seller", "pid", "cid", "gid",
-                      ])
-                  for row in rows:
-                      w.writerow(row)
+          pending_path = out_dir / "pending_wave1.csv"
+          with open(pending_path, "w", newline="", encoding="utf-8") as f:
+              w = csv.writer(f)
+              w.writerow(["product_url"])
+              w.writerows([[u] for u in pending])
 
-          # ---- main: batch over all URLs ----
-          all_urls = load_urls(ALL_URLS)
-          print(f"Total URLs: {len(all_urls)}")
-          print(f"MAX_PER_JOB={MAX_PER_JOB} MAX_JOBS={MAX_JOBS} BATCH_SIZE={BATCH_SIZE} MAX_ROUNDS={MAX_ROUNDS}")
+          max_rounds = min(3, max(1, int("${{ inputs.max_pending_rounds }}" or "2")))
+          do_retry = "true" if pending and max_rounds >= 2 else "false"
 
-          global_success = OUT_DIR / "collect_set_output.csv"
-          if global_success.exists():
-              global_success.unlink()
+          print(f"Wave 1 success rows : {len(success_rows)}")
+          print(f"Wave 1 pending URLs : {len(pending)}")
+          print(f"Will run retry wave : {do_retry}")
 
-          batch_idx = 0
-          offset = 0
-          while offset < len(all_urls):
-              batch = all_urls[offset : offset + BATCH_SIZE]
-              offset += len(batch)
-              batch_idx += 1
-              print("=" * 60)
-              print(f"BATCH {batch_idx}: {len(batch)} URLs (offset now {offset}/{len(all_urls)})")
-              print("=" * 60)
-
-              # --- first pass on this batch ---
-              groups = chunk_urls(batch)
-              header, rows, pending = run_pool(groups, tag=f"batch{batch_idx}-pass")
-              append_success(header, rows, global_success)
-              print(f"BATCH {batch_idx} pass: {len(rows)} success rows, {len(pending)} pending")
-
-              # --- retry waves until pending empty or MAX_ROUNDS ---
-              for wave in range(1, MAX_ROUNDS + 1):
-                  if not pending:
-                      print(f"BATCH {batch_idx}: pending empty after wave {wave - 1}")
-                      break
-                  print(f"BATCH {batch_idx} RETRY WAVE {wave}/{MAX_ROUNDS}: {len(pending)} pending")
-                  groups = chunk_urls(pending)
-                  header, rows, pending = run_pool(groups, tag=f"batch{batch_idx}-wave{wave}")
-                  append_success(header, rows, global_success)
-
-                  wave_pend_path = RETRY_DIR / f"pending_batch{batch_idx}_wave{wave}.csv"
-                  write_url_csv(wave_pend_path, pending)
-                  print(f"BATCH {batch_idx} wave {wave}: {len(rows)} success, {len(pending)} still pending")
-              else:
-                  # for-else: completed all waves without break
-                  if pending:
-                      print(f"BATCH {batch_idx}: hit MAX_ROUNDS with {len(pending)} still pending")
-
-              # carry leftover pending into a final file (accumulate across batches)
-              if pending:
-                  final_path = RETRY_DIR / "final_pending.csv"
-                  existing = load_urls(final_path) if final_path.is_file() else []
-                  merged = existing + [u for u in pending if u not in set(existing)]
-                  write_url_csv(final_path, merged)
-
-          # ensure files exist for upload
-          if not global_success.is_file():
-              append_success(None, [], global_success)
-          final_path = RETRY_DIR / "final_pending.csv"
-          if not final_path.is_file():
-              write_url_csv(final_path, [])
-
-          print("ORCHESTRATOR DONE")
-          print(f"  output: {global_success}")
-          print(f"  final_pending: {final_path}")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as o:
+              o.write(f"pending_count={len(pending)}\n")
+              o.write(f"do_retry={do_retry}\n")
           PY
 
-      - name: Upload outputs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wave1-results
+          path: wave1/
+          retention-days: 5
+
+  # ============================================================
+  # 5. PLAN-RETRY — re-chunk the pending URLs (only if needed)
+  # ============================================================
+  plan-retry:
+    needs: aggregate
+    if: needs.aggregate.outputs.do_retry == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.chunk.outputs.matrix }}
+      chunk_count: ${{ steps.chunk.outputs.chunk_count }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: wave1-results
+          path: wave1
+
+      - name: Split pending into chunks
+        id: chunk
+        run: |
+          python - <<'PY'
+          import csv, json, math, os
+          from pathlib import Path
+
+          MAX_PER_JOB = max(1, int("${{ inputs.urls_per_job }}" or "10"))
+          MAX_JOBS    = max(1, int("${{ inputs.max_parallel_jobs }}" or "20"))
+
+          urls = []
+          with open("wave1/pending_wave1.csv", encoding="utf-8-sig") as f:
+              for row in csv.DictReader(f):
+                  u = (row.get("product_url") or row.get("url") or "").strip()
+                  if u:
+                      urls.append(u)
+
+          n = len(urls)
+          if n == 0:
+              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as o:
+                  o.write("matrix={\"include\":[]}\n")
+                  o.write("chunk_count=0\n")
+              raise SystemExit(0)
+
+          chunk_size = min(MAX_PER_JOB, max(1, math.ceil(n / MAX_JOBS)))
+          chunks = [urls[i:i + chunk_size] for i in range(0, n, chunk_size)]
+
+          Path("chunks_retry").mkdir(exist_ok=True)
+          matrix = []
+          for i, group in enumerate(chunks):
+              path = f"chunks_retry/urls_{i}.csv"
+              with open(path, "w", newline="", encoding="utf-8") as f:
+                  w = csv.writer(f)
+                  w.writerow(["product_url"])
+                  w.writerows([[u] for u in group])
+              matrix.append({"index": i, "chunk": path, "count": len(group)})
+
+          print(f"Retry: {len(matrix)} chunks from {n} pending URLs")
+          for m in matrix:
+              print(f"  chunk {m['index']}: {m['count']} URLs")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as o:
+              o.write(f"matrix={json.dumps({'include': matrix})}\n")
+              o.write(f"chunk_count={len(matrix)}\n")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chunks-retry
+          path: chunks_retry/
+          retention-days: 2
+
+  # ============================================================
+  # 6. PROCESS-RETRY — matrix over pending chunks
+  # ============================================================
+  process-retry:
+    needs: plan-retry
+    if: needs.plan-retry.outputs.chunk_count != '0' && needs.plan-retry.outputs.chunk_count != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ fromJSON(inputs.max_parallel_jobs) }}
+      matrix: ${{ fromJSON(needs.plan-retry.outputs.matrix) }}
+    env:
+      HEADLESS: "1"
+      BROWSER_ACCEPT_LANGUAGE: "en-US,en;q=0.9"
+      BROWSER_TIMEZONE: "America/New_York"
+      AUTOMATION_BLOCK_WAIT: "20"
+      AUTOMATION_BLOCK_MAX: "2"
+    name: process-retry(${{ matrix.index }}, ${{ matrix.chunk }})
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: google_shopping_scrap/requirements.txt
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r google_shopping_scrap/requirements.txt
+
+      - name: Setup Chrome
+        id: setup-chrome
+        uses: browser-actions/setup-chrome@v2
+        with:
+          chrome-version: stable
+          install-dependencies: true
+
+      - name: Export Chrome path
+        run: |
+          echo "CHROME_BIN=${{ steps.setup-chrome.outputs.chrome-path }}" >> "$GITHUB_ENV"
+          echo "CHROME_PATH=${{ steps.setup-chrome.outputs.chrome-path }}" >> "$GITHUB_ENV"
+
+      - name: Install Xvfb
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: chunks-retry
+          path: chunks_retry
+
+      - name: Run scraper (retry)
+        env:
+          DISPLAY: :99
+        run: |
+          set -euo pipefail
+          Xvfb :99 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset &
+          XVFB_PID=$!
+          trap 'kill $XVFB_PID 2>/dev/null || true' EXIT
+          sleep 2
+
+          mkdir -p outputs
+          python -u google_shopping_scrap/collect_set_simple_from_urls_selenium.py \
+            --urls "${{ matrix.chunk }}" \
+            --out  "outputs/out_retry_${{ matrix.index }}.csv" \
+            --pending-out "outputs/pend_retry_${{ matrix.index }}.csv" \
+            --flush-every "${{ inputs.flush_every }}"
+
+      - name: Upload retry results
         if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: result-retry-${{ matrix.index }}
+          path: |
+            outputs/out_retry_${{ matrix.index }}.csv
+            outputs/pend_retry_${{ matrix.index }}.csv
+          if-no-files-found: warn
+          retention-days: 5
+
+  # ============================================================
+  # 7. FINAL AGGREGATE — merge everything → desired output
+  # ============================================================
+  final-aggregate:
+    needs: [aggregate, process-retry]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download wave-1 results
+        uses: actions/download-artifact@v4
+        with:
+          name: wave1-results
+          path: wave1
+          continue-on-error: true
+
+      - name: Download retry results (if any)
+        uses: actions/download-artifact@v4
+        with:
+          pattern: result-retry-*
+          path: retry_results
+          merge-multiple: true
+          continue-on-error: true
+
+      - name: Merge into final outputs
+        run: |
+          python - <<'PY'
+          import csv, os
+          from pathlib import Path
+
+          final = Path("final")
+          final.mkdir(exist_ok=True)
+
+          header = None
+          success_rows, seen_r = [], set()
+          pending, seen_p = [], set()
+
+          def ingest_out(path):
+              global header
+              with open(path, encoding="utf-8-sig") as f:
+                  reader = csv.reader(f)
+                  h = next(reader, None)
+                  if h and header is None:
+                      header = h
+                  for row in reader:
+                      if not row: continue
+                      key = tuple(row)
+                      if key in seen_r: continue
+                      seen_r.add(key)
+                      success_rows.append(row)
+
+          def ingest_pend(path):
+              with open(path, encoding="utf-8-sig") as f:
+                  for row in csv.DictReader(f):
+                      u = (row.get("product_url") or row.get("url") or "").strip()
+                      if u and u not in seen_p:
+                          seen_p.add(u)
+                          pending.append(u)
+
+          # Wave 1 success
+          p = Path("wave1/success_wave1.csv")
+          if p.is_file():
+              ingest_out(p)
+
+          # Retry success + any still-pending
+          for root, _, files in os.walk("retry_results"):
+              for name in files:
+                  path = Path(root) / name
+                  if name.startswith("out_retry_"):
+                      ingest_out(path)
+                  elif name.startswith("pend_retry_"):
+                      ingest_pend(path)
+
+          # If no retry ran, keep the original pending
+          if not any(Path("retry_results").rglob("pend_retry_*")):
+              p = Path("wave1/pending_wave1.csv")
+              if p.is_file():
+                  ingest_pend(p)
+
+          success_path = final / "collect_set_output.csv"
+          with open(success_path, "w", newline="", encoding="utf-8") as f:
+              w = csv.writer(f)
+              w.writerow(header or ["url","name","image_url","price","seller","pid","cid","gid"])
+              w.writerows(success_rows)
+
+          pending_path = final / "final_pending.csv"
+          with open(pending_path, "w", newline="", encoding="utf-8") as f:
+              w = csv.writer(f)
+              w.writerow(["product_url"])
+              w.writerows([[u] for u in pending])
+
+          print(f"FINAL success rows : {len(success_rows)}")
+          print(f"FINAL pending URLs : {len(pending)}")
+          PY
+
+      - name: Upload final artifacts
         uses: actions/upload-artifact@v4
         with:
           name: collect_set_outputs
           path: |
-            outputs/collect_set_output.csv
-            retry_results/final_pending.csv
-            retry_results/pending_batch*_wave*.csv
-          if-no-files-found: warn
+            final/collect_set_output.csv
+            final/final_pending.csv
           retention-days: 7
