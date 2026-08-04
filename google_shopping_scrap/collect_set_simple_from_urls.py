@@ -666,6 +666,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--urls", nargs="+", required=True, help="One or more URLs to process")
     ap.add_argument("--out", default=os.path.join(os.getcwd(), "scraped_products.csv"))
+    ap.add_argument("--pending-out", default=None, help="CSV file for URLs that return no product data")
     ap.add_argument("--flush-every", type=int, default=25, help="Flush progress every N written rows")
     args = ap.parse_args()
 
@@ -680,6 +681,7 @@ def main() -> int:
 
     wrote = 0
     processed = 0
+    pending_urls = []
 
     # Wraps sync_playwright() inside Stealth().use_sync() for playwright-stealth >= 2.0.x
     # with Stealth().use_sync(sync_playwright()) as p:
@@ -791,11 +793,13 @@ def main() -> int:
                     continue
                 if not html : 
                     print(f"Skipping url {url}")
+                    pending_urls.append(url)
                     continue
                 parsed_products = extract_all_products(html)
                 
                 if not parsed_products:
                     print(f"[warn] No products found for {url}. Page might be blocked or structure changed.", file=sys.stderr)
+                    pending_urls.append(url)
                     continue
 
                 for prod in parsed_products:
@@ -812,6 +816,16 @@ def main() -> int:
 
         # browser.close()
         context.close()
+
+    if args.pending_out:
+        os.makedirs(os.path.dirname(args.pending_out) or ".", exist_ok=True)
+        pending_urls = list(dict.fromkeys(pending_urls))
+        with open(args.pending_out, "w", newline="", encoding="utf-8") as pending_f:
+            pending_writer = csv.writer(pending_f)
+            pending_writer.writerow(["product_url"])
+            for pending_url in pending_urls:
+                pending_writer.writerow([pending_url])
+        print(f"Saved {len(pending_urls)} pending URLs to: {args.pending_out}")
 
     print(f"Saved {wrote} rows to: {args.out}")
     return 0

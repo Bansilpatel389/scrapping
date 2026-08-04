@@ -27,6 +27,12 @@ on:
         default: "25"
         type: string
 
+      max_pending_rounds:
+        description: "Maximum retry rounds for pending URLs"
+        required: true
+        default: "20"
+        type: string
+
 
 permissions:
   contents: read
@@ -402,6 +408,7 @@ jobs:
           python -u google_shopping_scrap/collect_set_simple_from_urls.py \
             --urls "$IN" \
             --out "collect_set_part_${JOB}.csv" \
+            --pending-out "pending_${JOB}.csv" \
             --flush-every "${{ inputs.flush_every }}"
 
 
@@ -418,12 +425,155 @@ jobs:
         with:
           name: collect_set_part_${{ matrix.job_index }}
 
-          path: collect_set_part_${{ matrix.job_index }}.csv
+          path: |
+            collect_set_part_${{ matrix.job_index }}.csv
+            pending_${{ matrix.job_index }}.csv
 
           if-no-files-found: warn
 
           retention-days: 7
 
+
+
+  # ============================================================
+  # RETRY PENDING
+  # Retry all pending URLs until empty or max_pending_rounds.
+  # ============================================================
+
+  retry_pending:
+    needs:
+      - plan
+      - process
+
+    if: always() && needs.plan.outputs.matrix != '[]'
+    runs-on: ubuntu-latest
+
+    env:
+      ZYTE_API_KEY: ${{ secrets.ZYTE_API_KEY }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r google_shopping_scrap/requirements.txt
+
+      - name: Install Playwright Chromium
+        run: |
+          python -m playwright install --with-deps chromium
+
+      - name: Install Xvfb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+
+      - name: Download worker results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: collect_set_part_*
+          path: pending_parts
+          merge-multiple: true
+
+      - name: Build pending_retry.csv
+        run: |
+          python - <<'PY'
+          import csv
+          import glob
+
+          seen = set()
+          urls = []
+
+          for file in sorted(glob.glob("pending_parts/pending_*.csv")):
+              with open(file, "r", encoding="utf-8-sig") as f:
+                  for row in csv.DictReader(f):
+                      url = (row.get("product_url") or row.get("url") or "").strip()
+                      if url and url not in seen:
+                          seen.add(url)
+                          urls.append(url)
+
+          with open("pending_retry.csv", "w", newline="", encoding="utf-8") as f:
+              writer = csv.writer(f)
+              writer.writerow(["product_url"])
+              writer.writerows([[url] for url in urls])
+
+          print(f"Initial pending URLs: {len(urls)}")
+          PY
+
+      - name: Retry pending URLs recursively
+        env:
+          DISPLAY: :99
+        run: |
+          Xvfb :99 -screen 0 1920x1080x24 &
+          sleep 3
+
+          mkdir -p retry_results
+          CURRENT_PENDING="pending_retry.csv"
+          MAX_ROUNDS="${{ inputs.max_pending_rounds }}"
+          ROUND=1
+
+          count_pending () {
+            python - "$1" <<'PY'
+          import csv, os, sys
+          path = sys.argv[1]
+          if not os.path.isfile(path):
+              print(0)
+              raise SystemExit(0)
+          with open(path, "r", encoding="utf-8-sig") as f:
+              reader = csv.DictReader(f)
+              print(sum(1 for row in reader if (row.get("product_url") or row.get("url") or "").strip()))
+          PY
+          }
+
+          while [ "$ROUND" -le "$MAX_ROUNDS" ]; do
+            PENDING_COUNT="$(count_pending "$CURRENT_PENDING")"
+
+            echo "Round $ROUND / $MAX_ROUNDS - pending URLs: $PENDING_COUNT"
+
+            if [ "$PENDING_COUNT" -eq 0 ]; then
+              echo "All pending URLs completed."
+              break
+            fi
+
+            ROUND_OUT="retry_results/collect_set_retry_${ROUND}.csv"
+            ROUND_PENDING="retry_results/pending_round_${ROUND}.csv"
+
+            python -u google_shopping_scrap/collect_set_simple_from_urls.py \
+              --urls "$CURRENT_PENDING" \
+              --out "$ROUND_OUT" \
+              --pending-out "$ROUND_PENDING" \
+              --flush-every "${{ inputs.flush_every }}"
+
+            CURRENT_PENDING="$ROUND_PENDING"
+            ROUND=$((ROUND + 1))
+          done
+
+          FINAL_COUNT="$(count_pending "$CURRENT_PENDING")"
+
+          if [ "$FINAL_COUNT" -gt 0 ]; then
+            cp "$CURRENT_PENDING" retry_results/final_pending.csv
+            echo "Max rounds reached. Remaining pending URLs: $FINAL_COUNT"
+          else
+            printf 'product_url\n' > retry_results/final_pending.csv
+          fi
+
+      - name: Upload retry results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: collect_set_retry_results
+          path: |
+            retry_results/collect_set_retry_*.csv
+            retry_results/pending_round_*.csv
+            retry_results/final_pending.csv
+          if-no-files-found: warn
+          retention-days: 7
 
 
   # ============================================================
@@ -436,6 +586,7 @@ jobs:
     needs:
       - plan
       - process
+      - retry_pending
 
     if: always() && needs.plan.outputs.matrix != '[]'
 
@@ -461,6 +612,12 @@ jobs:
       # Show downloaded files
       # --------------------------------------------------------
 
+      - name: Download retry results
+        uses: actions/download-artifact@v4
+        with:
+          name: collect_set_retry_results
+          path: retry_results
+
       - name: Show downloaded results
         run: |
           echo "Downloaded files:"
@@ -482,7 +639,11 @@ jobs:
 
 
           files = sorted(
-              glob.glob("parts/*.csv")
+              glob.glob("parts/collect_set_part_*.csv")
+          )
+
+          files += sorted(
+              glob.glob("retry_results/collect_set_retry_*.csv")
           )
 
 
@@ -613,6 +774,8 @@ jobs:
         with:
           name: collect_set_outputs
 
-          path: collect_set_output.csv
+          path: |
+            collect_set_output.csv
+            retry_results/final_pending.csv
 
           retention-days: 7
