@@ -1362,8 +1362,8 @@ def setup_driver(max_attempts: int = 3, base_delay: float = 4.0):
                 options.binary_location = chrome_bin
 
             # Prefer headless in CI; allow override via env for local debug.
-            if os.environ.get("HEADLESS", "1").lower() in ("1", "true", "yes"):
-                options.add_argument("--headless=new")
+            # if os.environ.get("HEADLESS", "1").lower() in ("1", "true", "yes"):
+            #     options.add_argument("--headless=new")
 
             options.add_argument("--no-sandbox")
             options.add_argument("--disable-dev-shm-usage")
