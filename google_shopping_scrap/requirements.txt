@@ -5,3 +5,8 @@ openpyxl>=3.1.2
 playwright
 faster_whisper
 playwright-stealth
+selenium
+numpy==1.26.4
+pandas==2.0.3
+undetected-chromedriver==3.5.5
+fake-useragent==1.4.0
