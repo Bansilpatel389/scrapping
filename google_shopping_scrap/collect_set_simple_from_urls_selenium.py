@@ -25,6 +25,7 @@
 # import sys
 # import tempfile
 # import time
+# import uuid
 # from typing import Any
 
 # import requests
@@ -81,6 +82,16 @@
 
 
 # atexit.register(_cleanup_temp_files)
+
+
+# def _unique_captcha_audio_path() -> str:
+#     """Per-process unique audio path to avoid collisions across parallel jobs."""
+#     path = os.path.join(
+#         tempfile.gettempdir(),
+#         f"captcha_audio_{os.getpid()}_{uuid.uuid4().hex[:8]}.mp4",
+#     )
+#     _TEMP_FILES.append(path)
+#     return path
 
 
 # # ---------------------------------------------------------------------------
@@ -292,7 +303,7 @@
 
 #             # Prefer headless in CI; allow override via env for local debug.
 #             # if os.environ.get("HEADLESS", "1").lower() in ("1", "true", "yes"):
-#                 # options.add_argument("--headless=new")
+#             #     options.add_argument("--headless=new")
 
 #             options.add_argument("--no-sandbox")
 #             options.add_argument("--disable-dev-shm-usage")
@@ -413,130 +424,248 @@
 
 
 # # ---------------------------------------------------------------------------
-# # reCAPTCHA detection / attempt (UNCHANGED per request)
+# # reCAPTCHA helpers
 # # ---------------------------------------------------------------------------
 
-# def find_recaptcha_frame(driver, match):
+# def _safe_default_content(driver) -> None:
+#     """Always return to top-level document; never raise."""
+#     try:
+#         driver.switch_to.default_content()
+#     except Exception:
+#         pass
+
+
+# def find_recaptcha_frame(driver, match: str) -> bool:
 #     """
-#     Find an iframe whose title contains `match` and switch to it.
+#     Find an iframe whose title contains `match` (case-insensitive) and switch to it.
 #     Returns True if switched successfully, False otherwise.
 #     Always switches back to default content first.
 #     """
-#     driver.switch_to.default_content()
-#     iframes = driver.find_elements(By.TAG_NAME, "iframe")
+#     _safe_default_content(driver)
+#     try:
+#         iframes = driver.find_elements(By.TAG_NAME, "iframe")
+#     except Exception:
+#         return False
+
+#     match_lower = match.lower()
 #     for iframe in iframes:
-#         title = iframe.get_attribute("title") or ""
-#         if match in title:
-#             driver.switch_to.frame(iframe)
-#             return True
+#         try:
+#             title = (iframe.get_attribute("title") or "").lower()
+#         except StaleElementReferenceException:
+#             continue
+#         if match_lower in title:
+#             try:
+#                 driver.switch_to.frame(iframe)
+#                 return True
+#             except Exception:
+#                 _safe_default_content(driver)
+#                 return False
 #     return False
 
 
-# def detect_recaptcha(driver):
+# def _wait_for_recaptcha_frame(driver, match: str, timeout: float = 8.0) -> bool:
+#     """Poll until an iframe whose title contains `match` appears, then switch into it."""
+#     deadline = time.time() + timeout
+#     while time.time() < deadline:
+#         if find_recaptcha_frame(driver, match):
+#             return True
+#         time.sleep(0.4)
+#     _safe_default_content(driver)
+#     return False
+
+
+# def is_recaptcha_present(driver) -> bool:
+#     """
+#     Read-only check: is a reCAPTCHA / challenge iframe or block page visible?
+#     Does not click or interact. Always returns to default content.
+#     """
+#     _safe_default_content(driver)
+
+#     try:
+#         iframes = driver.find_elements(By.TAG_NAME, "iframe")
+#     except Exception:
+#         iframes = []
+
+#     for iframe in iframes:
+#         try:
+#             title = (iframe.get_attribute("title") or "").lower()
+#             src = (iframe.get_attribute("src") or "").lower()
+#         except StaleElementReferenceException:
+#             continue
+#         if "recaptcha" in title or "recaptcha" in src:
+#             return True
+
+#     try:
+#         page = (driver.page_source or "").lower()
+#         current = (driver.current_url or "").lower()
+#         if "unusual traffic" in page or "/sorry/" in current:
+#             return True
+#     except Exception:
+#         pass
+
+#     return False
+
+
+# def detect_recaptcha(driver) -> bool:
+#     """
+#     Attempt to detect and solve a reCAPTCHA audio challenge.
+
+#     Guarantees:
+#     - Always restores default content before returning (no frame leaks).
+#     - Waits for challenge UI after checkbox / audio clicks.
+#     - Catches click-intercepted and other WebDriver errors.
+#     - Uses a unique temp path for the audio file (safe under parallel jobs).
+
+#     Early-break after the first solve attempt is intentional and preserved.
+#     Returns True only if the full solve path completed; False on any failure.
+#     Caller must re-check is_recaptcha_present() to know if the page is clear.
+#     """
+#     _safe_default_content(driver)
+#     audio_path = _unique_captcha_audio_path()
+
 #     # 1. Find and switch to the main reCAPTCHA iframe
 #     if not find_recaptcha_frame(driver, "reCAPTCHA"):
 #         print("No reCAPTCHA iframe found")
+#         _safe_default_content(driver)
 #         return False
 
 #     try:
-#         # 2. Click the checkbox
-#         checkboxes = driver.find_elements(By.CSS_SELECTOR, "div.recaptcha-checkbox-border")
-#         if not checkboxes:
+#         # 2. Wait for checkbox, then click
+#         try:
+#             checkbox = WebDriverWait(driver, 5).until(
+#                 EC.element_to_be_clickable(
+#                     (By.CSS_SELECTOR, "div.recaptcha-checkbox-border")
+#                 )
+#             )
+#         except TimeoutException:
 #             print("Checkbox not found")
-#             driver.switch_to.default_content()
 #             return False
 
-#         # Optional: human-like mouse movement (keep your existing helper)
-#         # human_mouse_move(driver, 2, 3)
+#         try:
+#             checkbox.click()
+#         except WebDriverException:
+#             try:
+#                 driver.execute_script("arguments[0].click();", checkbox)
+#             except WebDriverException as e:
+#                 print(f"Checkbox click failed: {e}")
+#                 return False
 
-#         checkboxes[0].click()
 #         print("reCAPTCHA detected")
-#         # human_mouse_move(driver, 2, 5)
 
-#         # 3. Switch to the challenge iframe
-#         if not find_recaptcha_frame(driver, "recaptcha challenge"):
+#         # Wait for challenge iframe to mount after checkbox click
+#         time.sleep(1.5)
+
+#         # 3. Switch to the challenge iframe (with wait)
+#         if not _wait_for_recaptcha_frame(driver, "recaptcha challenge", timeout=10):
 #             print("No challenge iframe found")
 #             return False
 
-#         # 4. Click the audio button
-#         audio_buttons = driver.find_elements(By.CSS_SELECTOR, "button.rc-button-audio")
-#         if not audio_buttons:
+#         # 4. Wait for audio button, then click
+#         try:
+#             audio_button = WebDriverWait(driver, 6).until(
+#                 EC.element_to_be_clickable(
+#                     (By.CSS_SELECTOR, "button.rc-button-audio")
+#                 )
+#             )
+#         except TimeoutException:
 #             print("Audio button not found")
-#             driver.switch_to.default_content()
 #             return False
 
-#         audio_buttons[0].click()
-#         print("Audio button clicked")
-#         # human_mouse_move(driver, 2, 5)
+#         try:
+#             audio_button.click()
+#         except WebDriverException:
+#             try:
+#                 driver.execute_script("arguments[0].click();", audio_button)
+#             except WebDriverException as e:
+#                 print(f"Audio button click failed: {e}")
+#                 return False
 
-#         # 5. Stay in / re-find the challenge iframe (sometimes it refreshes)
-#         if not find_recaptcha_frame(driver, "recaptcha challenge"):
+#         print("Audio button clicked")
+
+#         # Challenge iframe often refreshes after switching to audio mode
+#         time.sleep(1.5)
+
+#         # 5. Re-find the challenge iframe
+#         if not _wait_for_recaptcha_frame(driver, "recaptcha challenge", timeout=8):
 #             print("No challenge 2 iframe found")
 #             return False
 
 #         # Optional: read the doscaptcha text
 #         try:
-#             locator = WebDriverWait(driver, 10).until(
-#                 EC.visibility_of_element_located((By.CSS_SELECTOR, "div.rc-doscaptcha-body-text"))
+#             locator = WebDriverWait(driver, 5).until(
+#                 EC.visibility_of_element_located(
+#                     (By.CSS_SELECTOR, "div.rc-doscaptcha-body-text")
+#                 )
 #             )
 #             captcha_text = locator.text
 #             print(captcha_text)
 #         except TimeoutException:
 #             pass
 
-#         # 6. Get the audio download link
-#         a_tags = driver.find_elements(By.CSS_SELECTOR, "a.rc-audiochallenge-tdownload-link")
-#         if not a_tags:
+#         # 6. Wait for audio download link
+#         try:
+#             a_tag = WebDriverWait(driver, 8).until(
+#                 EC.presence_of_element_located(
+#                     (By.CSS_SELECTOR, "a.rc-audiochallenge-tdownload-link")
+#                 )
+#             )
+#         except TimeoutException:
 #             print("Automation Detected")
-#             driver.switch_to.default_content()
 #             return False
 
-#         url = a_tags[0].get_attribute("href")
+#         url = a_tag.get_attribute("href")
 #         if not url:
 #             print("No href found")
-#             driver.switch_to.default_content()
 #             return False
 
 #         print("Download URL:", url)
 
-#         # Download the audio
+#         # Download the audio to a unique temp path
 #         response = requests.get(url, stream=True, timeout=60)
 #         response.raise_for_status()
-#         with open("captcha_audio.mp4", "wb") as f:
+#         with open(audio_path, "wb") as f:
 #             for chunk in response.iter_content(chunk_size=8192):
 #                 if chunk:
 #                     f.write(chunk)
-#         print("Saved to: captcha_audio.mp4")
+#         print(f"Saved to: {audio_path}")
 
-#         # 7. Solve and submit (up to 3 attempts)
+#         # 7. Solve and submit (up to 3 attempts — early break preserved)
 #         for i in range(3):
-#             detected_text = solve_audio_captcha("captcha_audio.mp4")
+#             detected_text = solve_audio_captcha(audio_path)
 #             print(f"Solved: {detected_text}")
 
+#             if not detected_text or not str(detected_text).strip():
+#                 print("Empty solve result")
+#                 return False
+
 #             # Make sure we are still in the challenge frame
-#             if not find_recaptcha_frame(driver, "recaptcha challenge"):
+#             if not _wait_for_recaptcha_frame(driver, "recaptcha challenge", timeout=5):
 #                 print("Lost challenge frame")
 #                 return False
 
 #             input_box = WebDriverWait(driver, 10).until(
-#                 EC.visibility_of_element_located((By.CSS_SELECTOR, "input#audio-response"))
+#                 EC.visibility_of_element_located(
+#                     (By.CSS_SELECTOR, "input#audio-response")
+#                 )
 #             )
 #             input_box.clear()
-#             input_box.send_keys(detected_text)
+#             time.sleep(0.3)
+#             input_box.send_keys(str(detected_text).strip())
 
 #             time.sleep(1)
-#             input_box.send_keys(Keys.ENTER)   # or driver.find_element(...).click() on the verify button
+#             input_box.send_keys(Keys.ENTER)
 #             time.sleep(5)
 
-#             break   # keep the same early-break logic you had
+#             break   # keep the same early-break logic
 
-#         driver.switch_to.default_content()
 #         return True
 
-#     except (TimeoutException, NoSuchElementException) as e:
+#     except (TimeoutException, NoSuchElementException, WebDriverException) as e:
 #         print(f"Exception: {e}")
-#         driver.switch_to.default_content()
 #         return False
+#     finally:
+#         # Frame-leak fix: every exit path restores top-level context
+#         _safe_default_content(driver)
 
 
 # # ---------------------------------------------------------------------------
@@ -672,6 +801,11 @@
 #     """
 #     Navigate to url, handle consent / CAPTCHA, scroll, and return page source.
 #     Returns None when the page could not be loaded or yielded no usable content.
+
+#     CAPTCHA policy:
+#     - If a reCAPTCHA widget is present, attempt solve via detect_recaptcha().
+#     - Whether solve succeeds or fails, if the widget is STILL present afterward,
+#       treat the page as blocked and retry (or eventually mark pending).
 #     """
 #     for attempt in range(1, max_attempts + 1):
 #         driver = ensure_driver_alive(driver)
@@ -691,12 +825,27 @@
 
 #         time.sleep(3)
 
-#         # CAPTCHA / block page
-#         if detect_recaptcha(driver):
-#             log.warning("reCAPTCHA/block page present. Retrying...")
-#             continue
+#         # --- CAPTCHA gate -------------------------------------------------
+#         captcha_seen = is_recaptcha_present(driver)
 
-#         # Cookie consent (covers both warm-up residual and EU banner)
+#         if captcha_seen:
+#             log.warning("reCAPTCHA present on attempt %s — attempting solve", attempt)
+#             try:
+#                 detect_recaptcha(driver)
+#             except WebDriverException as e:
+#                 log.warning("CAPTCHA interaction failed: %s", e)
+#             _safe_default_content(driver)
+#             time.sleep(2)
+
+#             if is_recaptcha_present(driver):
+#                 log.warning(
+#                     "reCAPTCHA still present after solve attempt. Retrying..."
+#                 )
+#                 time.sleep(random.uniform(2.0, 4.0))
+#                 continue
+#             log.info("reCAPTCHA cleared on attempt %s", attempt)
+
+#         # Cookie consent
 #         accept_google_consent_if_present(driver)
 #         try:
 #             WebDriverWait(driver, 5).until(
@@ -710,7 +859,9 @@
 #         try:
 #             driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
 #             time.sleep(0.8)
-#             driver.execute_script("window.scrollTo(0, document.body.scrollHeight * 0.5);")
+#             driver.execute_script(
+#                 "window.scrollTo(0, document.body.scrollHeight * 0.5);"
+#             )
 #             time.sleep(0.5)
 #             driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
 #         except Exception:
@@ -718,7 +869,13 @@
 
 #         time.sleep(1.5)
 
-#         # Wait for at least one product container (reduces false "no products")
+#         # CAPTCHA may appear only after scroll / interaction
+#         if is_recaptcha_present(driver):
+#             log.warning("Challenge appeared after navigation/scroll. Retrying...")
+#             time.sleep(random.uniform(2.0, 4.0))
+#             continue
+
+#         # Wait for at least one product container
 #         try:
 #             WebDriverWait(driver, 10).until(
 #                 EC.presence_of_element_located(
@@ -726,19 +883,26 @@
 #                 )
 #             )
 #         except TimeoutException:
-#             log.warning("No product containers appeared within timeout for %s", url)
+#             log.warning(
+#                 "No product containers appeared within timeout for %s", url
+#             )
+#             if is_recaptcha_present(driver):
+#                 log.warning("Page still blocked by reCAPTCHA after timeout.")
+#                 time.sleep(random.uniform(2.0, 4.0))
+#                 continue
 
-#         # Second CAPTCHA check after scroll/consent
-#         if detect_recaptcha(driver):
-#             log.warning("Challenge appeared after navigation. Retrying...")
+#         try:
+#             html = driver.page_source
+#         except WebDriverException as e:
+#             log.warning("Could not read page_source: %s", e)
 #             continue
 
-#         html = driver.page_source
-#         if html and len(html) > 500:
+#         if html and len(html) > 500 and not is_recaptcha_present(driver):
 #             log.info("Page loaded successfully (%s chars).", len(html))
 #             return html
 
-#         log.warning("Empty or tiny page source on attempt %s", attempt)
+#         log.warning("Empty, blocked, or tiny page source on attempt %s", attempt)
+#         time.sleep(random.uniform(1.5, 3.0))
 
 #     return None
 
@@ -947,6 +1111,11 @@ logging.basicConfig(
     stream=sys.stdout,
 )
 log = logging.getLogger("collect_set")
+
+
+class AutomationBlockedError(Exception):
+    """Raised when Google shows the 'automated queries' / doscaptcha block."""
+
 
 OUT_FIELDS = [
     "url",
@@ -1193,8 +1362,8 @@ def setup_driver(max_attempts: int = 3, base_delay: float = 4.0):
                 options.binary_location = chrome_bin
 
             # Prefer headless in CI; allow override via env for local debug.
-            # if os.environ.get("HEADLESS", "1").lower() in ("1", "true", "yes"):
-            #     options.add_argument("--headless=new")
+            if os.environ.get("HEADLESS", "1").lower() in ("1", "true", "yes"):
+                options.add_argument("--headless=new")
 
             options.add_argument("--no-sandbox")
             options.add_argument("--disable-dev-shm-usage")
@@ -1481,15 +1650,23 @@ def detect_recaptcha(driver) -> bool:
             print("No challenge 2 iframe found")
             return False
 
-        # Optional: read the doscaptcha text
+        # Optional: read the doscaptcha / block text
         try:
             locator = WebDriverWait(driver, 5).until(
                 EC.visibility_of_element_located(
                     (By.CSS_SELECTOR, "div.rc-doscaptcha-body-text")
                 )
             )
-            captcha_text = locator.text
+            captcha_text = (locator.text or "").strip()
             print(captcha_text)
+            lower = captcha_text.lower()
+            if (
+                "automated queries" in lower
+                or "can't process your request" in lower
+                or "cannot process your request" in lower
+            ):
+                print("Automation Detected")
+                raise AutomationBlockedError(captcha_text)
         except TimeoutException:
             pass
 
@@ -1502,7 +1679,9 @@ def detect_recaptcha(driver) -> bool:
             )
         except TimeoutException:
             print("Automation Detected")
-            return False
+            raise AutomationBlockedError(
+                "Audio download link missing (automation detected)"
+            )
 
         url = a_tag.get_attribute("href")
         if not url:
@@ -1551,6 +1730,8 @@ def detect_recaptcha(driver) -> bool:
 
         return True
 
+    except AutomationBlockedError:
+        raise
     except (TimeoutException, NoSuchElementException, WebDriverException) as e:
         print(f"Exception: {e}")
         return False
@@ -1723,6 +1904,9 @@ def fetch_page_html(driver, url: str, max_attempts: int = 3) -> str | None:
             log.warning("reCAPTCHA present on attempt %s — attempting solve", attempt)
             try:
                 detect_recaptcha(driver)
+            except AutomationBlockedError:
+                # Propagate to main so consecutive-block policy can apply
+                raise
             except WebDriverException as e:
                 log.warning("CAPTCHA interaction failed: %s", e)
             _safe_default_content(driver)
@@ -1855,7 +2039,15 @@ def main() -> int:
             writer.writeheader()
             out_f.flush()
 
-            for url in urls:
+            consecutive_automation_blocks = 0
+            automation_wait_seconds = float(
+                os.environ.get("AUTOMATION_BLOCK_WAIT", "5")
+            )
+            max_consecutive_blocks = int(
+                os.environ.get("AUTOMATION_BLOCK_MAX", "2")
+            )
+
+            for idx, url in enumerate(urls):
                 url = url.strip()
                 if not url:
                     continue
@@ -1865,12 +2057,56 @@ def main() -> int:
 
                 try:
                     html = fetch_page_html(driver, url, max_attempts=3)
+                    consecutive_automation_blocks = 0
+                except AutomationBlockedError as e:
+                    consecutive_automation_blocks += 1
+                    log.warning(
+                        "Automation block #%s/%s on %s: %s",
+                        consecutive_automation_blocks,
+                        max_consecutive_blocks,
+                        url,
+                        e,
+                    )
+                    pending_urls.append(url)
+
+                    if consecutive_automation_blocks >= max_consecutive_blocks:
+                        remaining = [
+                            u.strip()
+                            for u in urls[idx + 1 :]
+                            if u and u.strip()
+                        ]
+                        log.error(
+                            "Automation detected %s times in a row. "
+                            "Adding %s remaining URLs to pending and shutting down.",
+                            consecutive_automation_blocks,
+                            len(remaining),
+                        )
+                        pending_urls.extend(remaining)
+                        processed += len(remaining)
+                        break
+
+                    log.info(
+                        "Waiting %.0fs before next URL after automation block...",
+                        automation_wait_seconds,
+                    )
+                    time.sleep(automation_wait_seconds)
+                    # Restart browser to get a fresher session
+                    try:
+                        if driver is not None:
+                            driver.quit()
+                    except Exception:
+                        pass
+                    driver = setup_driver()
+                    continue
                 except TimeoutException:
                     log.warning("Timeout fetching: %s", url)
+                    consecutive_automation_blocks = 0
                 except WebDriverException as e:
                     log.warning("WebDriver failed: %s (%s)", url, e)
+                    consecutive_automation_blocks = 0
                 except Exception as e:
                     log.warning("Fetch failed: %s (%s)", url, e)
+                    consecutive_automation_blocks = 0
 
                 if not html:
                     log.warning("Skipping url (no HTML): %s", url)
