@@ -1,7 +1,6 @@
 import sys
 import json
 import random
-import ftplib
 import os
 from datetime import datetime
 from selenium.webdriver.common.by import By
@@ -403,69 +402,6 @@ def start_new_driver(search_url):
             except:
                 pass
             time.sleep(random.uniform(5, 8))
-
-def download_csv_from_ftp(ftp_host, ftp_user, ftp_pass, ftp_path, remote_filename, local_filename):
-    """Download CSV file from FTP"""
-    try:
-        print(f"Downloading {remote_filename} from FTP...")
-        
-        ftp = ftplib.FTP()
-        ftp.connect(ftp_host, int(os.getenv("FTP_PORT", 21)))
-        ftp.login(ftp_user, ftp_pass)
-        ftp.set_pasv(True)
-        
-        if ftp_path and ftp_path != '/':
-            try:
-                ftp.cwd(ftp_path)
-            except:
-                print(f"Error: Could not change to directory {ftp_path}")
-                return None
-        
-        with open(local_filename, 'wb') as f:
-            ftp.retrbinary(f'RETR {remote_filename}', f.write)
-        
-        ftp.quit()
-        print(f"✓ Downloaded {remote_filename} to {local_filename}")
-        return local_filename
-        
-    except Exception as e:
-        print(f"Error downloading from FTP: {str(e)}")
-        return None
-
-def upload_to_ftp(ftp_host, ftp_user, ftp_pass, ftp_path, local_file, remote_filename):
-    """Upload file to FTP server"""
-    try:
-        print(f"Uploading {remote_filename} to FTP...")
-        
-        ftp = ftplib.FTP()
-        ftp.connect(ftp_host, 21)
-        ftp.login(ftp_user, ftp_pass)
-        ftp.set_pasv(True)
-        
-        if ftp_path and ftp_path != '/':
-            try:
-                ftp.cwd(ftp_path)
-            except:
-                dirs = ftp_path.strip('/').split('/')
-                current_path = ''
-                for dir in dirs:
-                    current_path += '/' + dir
-                    try:
-                        ftp.cwd(current_path)
-                    except:
-                        ftp.mkd(current_path)
-                        ftp.cwd(current_path)
-        
-        with open(local_file, 'rb') as f:
-            ftp.storbinary(f'STOR {remote_filename}', f)
-        
-        ftp.quit()
-        print(f"✓ Uploaded {remote_filename} to FTP")
-        return True
-        
-    except Exception as e:
-        print(f"Error uploading to FTP: {str(e)}")
-        return False
 
 def split_csv(input_csv, output_dir, chunk_id, total_chunks):
     """Split CSV into chunks and return specific chunk"""
@@ -1507,13 +1443,7 @@ def process_chunk(chunk_file, chunk_id, total_chunks, round_id=1, output_dir='ou
         if remaining_results:
             pd.DataFrame(remaining_results).to_csv(csv3_path, index=False)
             print(f"✓ Saved remaining rows: {csv3_filename}")
-        
-        # Upload to FTP STOPPED TO AVOID UNNECESSARY FTP USAGE DURING TESTING
-        # if csv1_data:
-        #     upload_to_ftp(ftp_host, ftp_user, ftp_pass, ftp_path, csv1_path, csv1_filename)
-        
-        # if csv2_data:
-        #     upload_to_ftp(ftp_host, ftp_user, ftp_pass, ftp_path, csv2_path, csv2_filename)
+
         
         print(f"\n✓ Chunk {chunk_id} processing completed")
         return {
@@ -1553,8 +1483,8 @@ def process_chunk(chunk_file, chunk_id, total_chunks, round_id=1, output_dir='ou
         }
 
 
-def run_recursive_pipeline(input_csv, total_chunks, ftp_host, ftp_user, ftp_pass, ftp_path, max_rounds=10):
-    """Process chunks recursively until no remaining rows are left."""
+def run_recursive_pipeline(input_csv, total_chunks, max_rounds=10):
+    """Process chunks recursively using local files only."""
     run_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_root = os.path.join("output", f"recursive_run_{run_ts}")
     rounds_root = os.path.join(run_root, "rounds")
@@ -1623,13 +1553,13 @@ def run_recursive_pipeline(input_csv, total_chunks, ftp_host, ftp_user, ftp_pass
         if any_chunk_failed:
             print("One or more chunks failed in this round.")
 
-        round_product_merged, round_product_rows = merge_csv_files(
+        _, round_product_rows = merge_csv_files(
             round_product_files,
             os.path.join(round_dir, f"merged_products_round{round_id}.csv"),
             sort_columns=["product_id"],
             expected_columns=PRODUCT_FINAL_COLUMNS,
         )
-        round_seller_merged, round_seller_rows = merge_csv_files(
+        _, round_seller_rows = merge_csv_files(
             round_seller_files,
             os.path.join(round_dir, f"merged_sellers_round{round_id}.csv"),
             sort_columns=["product_id", "seller"],
@@ -1640,23 +1570,6 @@ def run_recursive_pipeline(input_csv, total_chunks, ftp_host, ftp_user, ftp_pass
             sort_columns=["product_id"],
             expected_columns=PRODUCT_FINAL_COLUMNS,
         )
-
-        # Upload round-level merged files only after the full round has finished.
-        if round_product_merged:
-            upload_to_ftp(
-                ftp_host, ftp_user, ftp_pass, ftp_path,
-                round_product_merged, os.path.basename(round_product_merged)
-            )
-        if round_seller_merged:
-            upload_to_ftp(
-                ftp_host, ftp_user, ftp_pass, ftp_path,
-                round_seller_merged, os.path.basename(round_seller_merged)
-            )
-        if round_remaining_merged:
-            upload_to_ftp(
-                ftp_host, ftp_user, ftp_pass, ftp_path,
-                round_remaining_merged, os.path.basename(round_remaining_merged)
-            )
 
         print(
             f"Round {round_id} summary: products={round_product_rows}, "
@@ -1685,17 +1598,6 @@ def run_recursive_pipeline(input_csv, total_chunks, ftp_host, ftp_user, ftp_pass
         sort_columns=["product_id", "seller"],
     )
 
-    if final_products_file:
-        upload_to_ftp(
-            ftp_host, ftp_user, ftp_pass, ftp_path,
-            final_products_file, os.path.basename(final_products_file)
-        )
-    if final_sellers_file:
-        upload_to_ftp(
-            ftp_host, ftp_user, ftp_pass, ftp_path,
-            final_sellers_file, os.path.basename(final_sellers_file)
-        )
-
     print("\nFinal merge summary:")
     print(f"Final products: {final_product_rows} rows")
     print(f"Final sellers:  {final_seller_rows} rows")
@@ -1703,82 +1605,62 @@ def run_recursive_pipeline(input_csv, total_chunks, ftp_host, ftp_user, ftp_pass
 
     return bool(final_products_file or final_sellers_file)
 
+
 def main():
-    parser = argparse.ArgumentParser(description='Google Shopping Scraper with Captcha Solving')
-    parser.add_argument('--chunk-id', type=int, default=1, help='Chunk ID (1-based)')
-    parser.add_argument('--total-chunks', type=int, required=True, help='Total number of chunks')
-    parser.add_argument('--input-file', type=str, required=True, help='Input CSV filename on FTP')
-    parser.add_argument('--recursive', action='store_true', help='Run recursive chunk processing until remaining is empty')
-    parser.add_argument('--max-rounds', type=int, default=10, help='Maximum recursive rounds')
-    
+    parser = argparse.ArgumentParser(description="Google Shopping Scraper - local files only")
+    parser.add_argument("--chunk-id", type=int, default=1, help="Chunk ID (1-based)")
+    parser.add_argument("--total-chunks", type=int, required=True, help="Total number of chunks")
+    parser.add_argument("--input-file", type=str, required=True, help="Local input CSV path")
+    parser.add_argument("--recursive", action="store_true", help="Run recursive local processing")
+    parser.add_argument("--max-rounds", type=int, default=10, help="Maximum recursive rounds")
     args = parser.parse_args()
-    
+
     print("=" * 60)
-    print("Google Shopping Scraper with Captcha Solving")
+    print("Google Shopping Scraper")
     print(f"Chunk: {args.chunk_id} of {args.total_chunks}")
     print(f"Input file: {args.input_file}")
     print(f"Recursive mode: {'Yes' if args.recursive else 'No'}")
     print("=" * 60)
-    
 
-    ftp_host = os.getenv('FTP_HOST')
-    ftp_user = os.getenv('FTP_USER')
-    ftp_pass = os.getenv('FTP_PASS')
-    ftp_path = os.getenv('FTP_PATH', '/scrap/')
-    
-    if not all([ftp_host, ftp_user, ftp_pass]):
-        print("Error: FTP credentials not found in environment variables")
-        print("Please set FTP_HOST, FTP_USER, FTP_PASS environment variables")
+    if not os.path.isfile(args.input_file):
+        print(f"Error: Local input CSV not found: {args.input_file}")
         sys.exit(1)
-    
-    # Use local file if it exists, otherwise download from FTP
-    input_csv = 'input.csv'
-    if os.path.exists(args.input_file):
-        print(f"Using local file: {args.input_file}")
-        if args.input_file != input_csv:
-            import shutil
-            shutil.copy2(args.input_file, input_csv)
-    else:
-        if not download_csv_from_ftp(ftp_host, ftp_user, ftp_pass, ftp_path, args.input_file, input_csv):
-            print("Failed to download input CSV")
-            sys.exit(1)
-    
+
     if args.recursive:
         success = run_recursive_pipeline(
-            input_csv=input_csv,
+            input_csv=args.input_file,
             total_chunks=args.total_chunks,
-            ftp_host=ftp_host,
-            ftp_user=ftp_user,
-            ftp_pass=ftp_pass,
-            ftp_path=ftp_path,
             max_rounds=max(1, args.max_rounds),
         )
     else:
-        chunk_file = split_csv(input_csv, 'chunks', args.chunk_id, args.total_chunks)
+        chunk_dir = os.path.join("chunks", f"job_{args.chunk_id}")
+        chunk_file = split_csv(args.input_file, chunk_dir, args.chunk_id, args.total_chunks)
         if not chunk_file:
             print("Failed to split CSV")
             sys.exit(1)
-        
-        chunk_result = process_chunk(chunk_file, args.chunk_id, args.total_chunks)
+
+        output_dir = os.path.join("output", f"chunk_{args.chunk_id}")
+        chunk_result = process_chunk(
+            chunk_file,
+            args.chunk_id,
+            args.total_chunks,
+            round_id=1,
+            output_dir=output_dir,
+        )
         success = chunk_result.get("success", False)
-        
+
         try:
-            os.remove(chunk_file)
-            shutil.rmtree('chunks', ignore_errors=True)
-        except:
+            shutil.rmtree(chunk_dir, ignore_errors=True)
+        except Exception:
             pass
 
-    try:
-        os.remove(input_csv)
-    except:
-        pass
-    
     if success:
         print("\n✓ Processing completed successfully")
         sys.exit(0)
-    else:
-        print("\n✗ Processing failed")
-        sys.exit(1)
+
+    print("\n✗ Processing failed")
+    sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
