@@ -1,3 +1,2 @@
-2026/08/04-10:49:54.893 77872 Reusing MANIFEST /home/cccadm/Bansil/google_shopping_26_08_03/scrapping/google_shopping_scrap/my_chrome_profile/Default/Sync Data/LevelDB/MANIFEST-000001
-2026/08/04-10:49:54.894 77872 Recovering log #3
-2026/08/04-10:49:54.894 77872 Reusing old log /home/cccadm/Bansil/google_shopping_26_08_03/scrapping/google_shopping_scrap/my_chrome_profile/Default/Sync Data/LevelDB/000003.log 
+2026/08/04-11:17:35.058 79430 Creating DB /home/cccadm/Bansil/google_shopping_26_08_03/scrapping/google_shopping_scrap/my_chrome_profile/Default/Sync Data/LevelDB since it was missing.
+2026/08/04-11:17:35.082 79430 Reusing MANIFEST /home/cccadm/Bansil/google_shopping_26_08_03/scrapping/google_shopping_scrap/my_chrome_profile/Default/Sync Data/LevelDB/MANIFEST-000001

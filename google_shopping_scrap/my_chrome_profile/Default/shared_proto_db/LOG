@@ -1,3 +1,2 @@
-2026/08/04-10:49:55.057 77872 Reusing MANIFEST /home/cccadm/Bansil/google_shopping_26_08_03/scrapping/google_shopping_scrap/my_chrome_profile/Default/shared_proto_db/MANIFEST-000001
-2026/08/04-10:49:55.057 77872 Recovering log #3
-2026/08/04-10:49:55.057 77872 Reusing old log /home/cccadm/Bansil/google_shopping_26_08_03/scrapping/google_shopping_scrap/my_chrome_profile/Default/shared_proto_db/000003.log 
+2026/08/04-11:17:35.439 7942f Creating DB /home/cccadm/Bansil/google_shopping_26_08_03/scrapping/google_shopping_scrap/my_chrome_profile/Default/shared_proto_db since it was missing.
+2026/08/04-11:17:35.465 7942f Reusing MANIFEST /home/cccadm/Bansil/google_shopping_26_08_03/scrapping/google_shopping_scrap/my_chrome_profile/Default/shared_proto_db/MANIFEST-000001
