@@ -1,6 +1,14 @@
-selenium==4.18.1
-undetected-chromedriver==3.5.5
-beautifulsoup4==4.12.2
-requests==2.31.0
-pandas==2.0.3
-fake-useragent==1.4.0
+- name: Install Python dependencies
+  run: |
+    python -m pip install --upgrade pip setuptools wheel
+
+    # Remove potentially cached/incompatible binaries
+    pip uninstall -y numpy pandas || true
+
+    # Install pinned compatible versions
+    pip install --no-cache-dir -r gshopping/requirements.txt
+
+    echo "Installed versions:"
+    python -c "import numpy; print('NumPy:', numpy.__version__)"
+    python -c "import pandas; print('Pandas:', pandas.__version__)"
+    python -c "import selenium; print('Selenium:', selenium.__version__)"

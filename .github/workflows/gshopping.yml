@@ -80,31 +80,33 @@ jobs:
           google-chrome --version || google-chrome-stable --version
 
       - name: Install Python dependencies
-        shell: bash
         run: |
-          python -m pip install --upgrade pip
+          python -m pip install --upgrade pip setuptools wheel
 
-          if [ -f "gshopping/requirements.txt" ]; then
-            pip install -r gshopping/requirements.txt
-          elif [ -f "requirements.txt" ]; then
-            pip install -r requirements.txt
-          else
-            pip install pandas selenium undetected-chromedriver
-          fi
+          # Remove potentially cached/incompatible binaries
+          pip uninstall -y numpy pandas || true
 
-      - name: Run chunk ${{ matrix.chunk_id }}
-        env:
-          DISPLAY: ":99"
-          CHROME_BIN: "/usr/bin/google-chrome"
-        shell: bash
-        run: |
-          Xvfb :99 -screen 0 1920x1080x24 > /tmp/xvfb.log 2>&1 &
-          sleep 3
+          # Install pinned compatible versions
+          pip install --no-cache-dir -r gshopping/requirements.txt
 
-          python -u gshopping/gscrapperci.py \
-            --chunk-id "${{ matrix.chunk_id }}" \
-            --total-chunks "${{ inputs.total_chunks }}" \
-            --input-file "${{ inputs.input_file }}"
+          echo "Installed versions:"
+          python -c "import numpy; print('NumPy:', numpy.__version__)"
+          python -c "import pandas; print('Pandas:', pandas.__version__)"
+          python -c "import selenium; print('Selenium:', selenium.__version__)"
+
+          - name: Run chunk ${{ matrix.chunk_id }}
+            env:
+              DISPLAY: ":99"
+              CHROME_BIN: "/usr/bin/google-chrome"
+            shell: bash
+            run: |
+              Xvfb :99 -screen 0 1920x1080x24 > /tmp/xvfb.log 2>&1 &
+              sleep 3
+
+              python -u gshopping/gscrapperci.py \
+                --chunk-id "${{ matrix.chunk_id }}" \
+                --total-chunks "${{ inputs.total_chunks }}" \
+                --input-file "${{ inputs.input_file }}"
 
       - name: Upload chunk result
         if: always()
