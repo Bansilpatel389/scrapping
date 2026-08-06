@@ -7,7 +7,7 @@ on:
       domains_file:
         description: "Repo path to domains CSV. Example: data/domains.csv"
         required: true
-        default: "data/domains.csv"
+        default: "built_with/data/domains.csv"
         type: string
       domains_per_job:
         description: "MAX domains per worker"
