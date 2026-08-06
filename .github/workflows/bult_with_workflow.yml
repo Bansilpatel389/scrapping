@@ -1,0 +1,351 @@
+# .github/workflows/built_with_captcha_solver.yml
+name: BuiltWith Scraper
+
+on:
+  workflow_dispatch:
+    inputs:
+      domains_file:
+        description: "Repo path to domains CSV. Example: data/domains.csv"
+        required: true
+        default: "data/domains.csv"
+        type: string
+      domains_per_job:
+        description: "MAX domains per worker"
+        required: true
+        default: "5"
+        type: string
+      max_parallel_jobs:
+        description: "Max concurrent matrix jobs"
+        required: true
+        default: "10"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  # ============================================================
+  # 1. LOAD
+  # ============================================================
+  load:
+    runs-on: ubuntu-latest
+    outputs:
+      total: ${{ steps.load.outputs.total }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Load and normalize domains
+        id: load
+        run: |
+          python - <<'PY'
+          import csv, os, sys
+          in_path = "${{ inputs.domains_file }}"
+          if not os.path.isfile(in_path):
+              print(f"ERROR: domains_file not found: {in_path}")
+              sys.exit(1)
+
+          seen, domains = set(), []
+          with open(in_path, "r", encoding="utf-8-sig") as f:
+              reader = csv.DictReader(f)
+              print("CSV columns:", reader.fieldnames)
+              for row in reader:
+                  d = (row.get("domain") or row.get("url") or "").strip().lower()
+                  d = d.replace("https://", "").replace("http://", "").split("/")[0]
+                  if d and d not in seen:
+                      seen.add(d)
+                      domains.append(d)
+
+          os.makedirs("domain_data", exist_ok=True)
+          with open("domain_data/all_domains.csv", "w", newline="", encoding="utf-8") as f:
+              w = csv.writer(f)
+              w.writerow(["domain"])
+              w.writerows([[d] for d in domains])
+
+          print(f"Total unique domains: {len(domains)}")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as o:
+              o.write(f"total={len(domains)}\n")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: all_domains
+          path: domain_data/all_domains.csv
+          retention-days: 2
+
+  # ============================================================
+  # 2. PLAN (split into chunks)
+  # ============================================================
+  plan:
+    needs: load
+    if: ${{ needs.load.outputs.total != '0' && needs.load.outputs.total != '' }}
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.chunk.outputs.matrix }}
+      chunk_count: ${{ steps.chunk.outputs.chunk_count }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: all_domains
+          path: domain_data
+
+      - name: Split into chunks
+        id: chunk
+        run: |
+          python - <<'PY'
+          import csv, json, math, os
+          from pathlib import Path
+
+          MAX_PER_JOB = max(1, int("${{ inputs.domains_per_job }}" or "5"))
+          MAX_JOBS    = max(1, int("${{ inputs.max_parallel_jobs }}" or "10"))
+
+          domains = []
+          with open("domain_data/all_domains.csv", encoding="utf-8-sig") as f:
+              for row in csv.DictReader(f):
+                  d = (row.get("domain") or "").strip().lower()
+                  if d:
+                      domains.append(d)
+
+          n = len(domains)
+          chunk_size = min(MAX_PER_JOB, max(1, math.ceil(n / MAX_JOBS)))
+          chunks = [domains[i:i+chunk_size] for i in range(0, n, chunk_size)]
+
+          Path("chunks").mkdir(exist_ok=True)
+          matrix = []
+          for i, group in enumerate(chunks):
+              path = f"chunks/domains_{i}.csv"
+              with open(path, "w", newline="", encoding="utf-8") as f:
+                  w = csv.writer(f)
+                  w.writerow(["domain"])
+                  w.writerows([[d] for d in group])
+              matrix.append({"index": i, "chunk": path, "count": len(group)})
+
+          print(f"Plan: {len(matrix)} chunks (≈{chunk_size} domains each)")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as o:
+              o.write(f"matrix={json.dumps({'include': matrix})}\n")
+              o.write(f"chunk_count={len(matrix)}\n")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chunks
+          path: chunks/
+          retention-days: 2
+
+  # ============================================================
+  # 3. PROCESS (matrix workers + Xvfb)
+  # ============================================================
+  process:
+    needs: plan
+    if: ${{ needs.plan.outputs.chunk_count != '0' }}
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ fromJSON(inputs.max_parallel_jobs) }}
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    name: process(${{ matrix.index }}, ${{ matrix.count }} domains)
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install Playwright browsers
+        run: playwright install chromium --with-deps
+
+      - name: Install Xvfb
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq xvfb
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: chunks
+          path: chunks
+
+      - name: Run BuiltWith scraper
+        env:
+          DISPLAY: :99
+          HF_HUB_DISABLE_TELEMETRY: "1"
+        run: |
+          set -euo pipefail
+
+          # Start virtual display
+          Xvfb :99 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset &
+          XVFB_PID=$!
+          trap 'kill $XVFB_PID 2>/dev/null || true' EXIT
+          sleep 2
+
+          mkdir -p outputs
+          cp "${{ matrix.chunk }}" domains.csv
+
+          # Force headless=False so it uses the Xvfb display
+          # (or keep headless=True — both work with Xvfb)
+          python -u - <<'PY'
+          with open("built_with_captcha_solver.py", "r", encoding="utf-8") as f:
+              code = f.read()
+          # Prefer headless=True even with Xvfb (faster & more stable)
+          code = code.replace("headless=False", "headless=True")
+          with open("built_with_captcha_solver.py", "w", encoding="utf-8") as f:
+              f.write(code)
+          PY
+
+          python -u built_with_captcha_solver.py
+
+          # Rename output
+          if [ -f builtwith_results.csv ]; then
+            mv builtwith_results.csv "outputs/out_${{ matrix.index }}.csv"
+          else
+            echo "domain,company_name,error" > "outputs/out_${{ matrix.index }}.csv"
+          fi
+
+          # Collect pending domains
+          python - <<'PY'
+          import csv
+          from pathlib import Path
+
+          out_path = Path("outputs/out_${{ matrix.index }}.csv")
+          pend_path = Path("outputs/pend_${{ matrix.index }}.csv")
+
+          pending = []
+          if out_path.exists():
+              with open(out_path, encoding="utf-8-sig") as f:
+                  reader = csv.DictReader(f)
+                  for row in reader:
+                      domain = (row.get("domain") or "").strip()
+                      error = (row.get("error") or "").strip()
+                      company = (row.get("company_name") or "").strip()
+                      tech = (row.get("technology") or "").strip()
+                      if error or (not company and tech in ("", "[]", "null")):
+                          if domain:
+                              pending.append(domain)
+          else:
+              with open("domains.csv", encoding="utf-8-sig") as f:
+                  for row in csv.DictReader(f):
+                      d = (row.get("domain") or "").strip()
+                      if d:
+                          pending.append(d)
+
+          with open(pend_path, "w", newline="", encoding="utf-8") as f:
+              w = csv.writer(f)
+              w.writerow(["domain"])
+              w.writerows([[d] for d in pending])
+
+          print(f"Worker ${{ matrix.index }}: {len(pending)} pending domains")
+          PY
+
+      - name: Upload worker results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: result-${{ matrix.index }}
+          path: |
+            outputs/out_${{ matrix.index }}.csv
+            outputs/pend_${{ matrix.index }}.csv
+          if-no-files-found: warn
+          retention-days: 5
+
+  # ============================================================
+  # 4. FINAL AGGREGATE
+  # ============================================================
+  final-aggregate:
+    needs: process
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all worker results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: result-*
+          path: all_results
+          merge-multiple: true
+
+      - name: Merge results + pending
+        id: merge
+        run: |
+          python - <<'PY'
+          import csv, os
+          from pathlib import Path
+
+          final = Path("final")
+          final.mkdir(exist_ok=True)
+
+          header = None
+          success, seen_s = [], set()
+          pending, seen_p = [], set()
+
+          for root, _, files in os.walk("all_results"):
+              for name in files:
+                  path = Path(root) / name
+
+                  if name.startswith("out_") and name.endswith(".csv"):
+                      with open(path, encoding="utf-8-sig") as f:
+                          reader = csv.reader(f)
+                          h = next(reader, None)
+                          if h and header is None:
+                              header = h
+                          for row in reader:
+                              if not row:
+                                  continue
+                              key = tuple(row)
+                              if key in seen_s:
+                                  continue
+                              seen_s.add(key)
+                              success.append(row)
+
+                  elif name.startswith("pend_") and name.endswith(".csv"):
+                      with open(path, encoding="utf-8-sig") as f:
+                          for row in csv.DictReader(f):
+                              d = (row.get("domain") or "").strip()
+                              if d and d not in seen_p:
+                                  seen_p.add(d)
+                                  pending.append(d)
+
+          with open(final / "builtwith_results.csv", "w", newline="", encoding="utf-8") as f:
+              w = csv.writer(f)
+              w.writerow(header or [
+                  "domain", "company_name", "linkedin_site", "company_image", "location",
+                  "telephone", "listed_contacts", "vertical", "company_data", "google_data",
+                  "performance_data", "social_links", "emails", "traffic_rankings",
+                  "technology_spend", "technology", "updated_at"
+              ])
+              w.writerows(success)
+
+          with open(final / "pending_urls.csv", "w", newline="", encoding="utf-8") as f:
+              w = csv.writer(f)
+              w.writerow(["domain"])
+              w.writerows([[d] for d in pending])
+
+          print(f"FINAL success rows : {len(success)}")
+          print(f"FINAL pending domains : {len(pending)}")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as o:
+              o.write(f"success_count={len(success)}\n")
+              o.write(f"pending_count={len(pending)}\n")
+
+          with open(os.environ.get("GITHUB_STEP_SUMMARY", "/dev/null"), "a", encoding="utf-8") as s:
+              s.write("### BuiltWith Scraper Result\n")
+              s.write(f"- success rows: **{len(success)}**\n")
+              s.write(f"- pending domains: **{len(pending)}**\n")
+          PY
+
+      - name: Upload final artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: builtwith_outputs
+          path: |
+            final/builtwith_results.csv
+            final/pending_urls.csv
+          retention-days: 7
