@@ -1,4 +1,3 @@
-```yaml
 # .github/workflows/built_with_captcha_solver.yml
 
 name: BuiltWith Scraper
@@ -943,4 +942,3 @@ jobs:
             final/pending_urls.csv
 
           retention-days: 7
-```
