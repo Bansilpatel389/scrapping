@@ -188,20 +188,19 @@ jobs:
           mkdir -p outputs
           cp "${{ matrix.chunk }}" domains.csv
 
-          # Force headless=False so it uses the Xvfb display
-          # (or keep headless=True — both work with Xvfb)
+          # Force headless=True for CI stability
           python -u - <<'PY'
-          with open("built_with_captcha_solver.py", "r", encoding="utf-8") as f:
+          with open("built_with/built_with_captcha_solver.py", "r", encoding="utf-8") as f:
               code = f.read()
-          # Prefer headless=True even with Xvfb (faster & more stable)
           code = code.replace("headless=False", "headless=True")
-          with open("built_with_captcha_solver.py", "w", encoding="utf-8") as f:
+          with open("built_with/built_with_captcha_solver.py", "w", encoding="utf-8") as f:
               f.write(code)
           PY
 
-          python -u built_with_captcha_solver.py
+          # Run from the folder that contains the script
+          python -u built_with/built_with_captcha_solver.py
 
-          # Rename output
+          # Rename output (script writes to current working directory)
           if [ -f builtwith_results.csv ]; then
             mv builtwith_results.csv "outputs/out_${{ matrix.index }}.csv"
           else
