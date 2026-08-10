@@ -312,7 +312,7 @@ jobs:
             local display=$2
             echo "===== Starting $script on DISPLAY=$display ====="
 
-            Xvfb $display -screen 0 1920x1080x24 -ac +extension GLX +render -noreset &
+            Xvfb $display -screen 0 1600x900x24 -ac +extension GLX +render -noreset &
             local xvfb_pid=$!
             sleep 2
 
