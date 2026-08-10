@@ -1,0 +1,11 @@
+beautifulsoup4
+numpy
+pyautogui
+mysql-connector-python
+undetected-chromedriver
+selenium
+webdriver-manager
+pymysql
+cryptography
+SQLAlchemy
+python-dotenv
