@@ -86,7 +86,7 @@ jobs:
           echo "Script to run      : ${{ github.event.inputs.script_to_run || 'with_logging' }}"
           echo "Max runtime (h)    : ${{ github.event.inputs.max_runtime_hours || '6' }}"
 
-      - name: Run scraper under Xvfb
+      - name: Run scraper under Xvfb (separate displays)
         env:
           MYSQL_HOST: ${{ secrets.MYSQL_HOST }}
           MYSQL_PORT: ${{ secrets.MYSQL_PORT }}
@@ -95,11 +95,11 @@ jobs:
           MYSQL_DB:   ${{ secrets.MYSQL_DB }}
           MYSQL_PASSWORD: ${{ secrets.MYSQL_PASS }}
           MYSQL_DATABASE: ${{ secrets.MYSQL_DB }}
-          DISPLAY: :99
           PYTHONUNBUFFERED: "1"
         run: |
-          Xvfb :99 -screen 0 1920x1080x24 &
-          sleep 3
+          # Create Xauthority file (fixes pyautogui error)
+          touch $HOME/.Xauthority
+          chmod 600 $HOME/.Xauthority
 
           SCRIPT_CHOICE="${{ github.event.inputs.script_to_run || 'with_logging' }}"
           MAX_HOURS="${{ github.event.inputs.max_runtime_hours || '6' }}"
@@ -119,23 +119,35 @@ jobs:
 
           run_one () {
             local script=$1
-            echo "===== Starting $script ====="
-            timeout --foreground --signal=TERM --kill-after=30s ${RUNTIME_SECONDS}s \
+            local display=$2
+            echo "===== Starting $script on DISPLAY=$display ====="
+
+            # Start a dedicated Xvfb for this script
+            Xvfb $display -screen 0 1920x1080x24 -ac +extension GLX +render -noreset &
+            local xvfb_pid=$!
+            sleep 2
+
+            # Run the script with its own DISPLAY
+            DISPLAY=$display timeout --foreground --signal=TERM --kill-after=30s ${RUNTIME_SECONDS}s \
               python -u "$script" || true
-            echo "===== Finished $script (exit code $?) ====="
+
+            # Kill the dedicated Xvfb
+            kill $xvfb_pid 2>/dev/null || true
+            echo "===== Finished $script ====="
           }
 
           case "$SCRIPT_CHOICE" in
             with_logging)
-              run_one upwork_profile_fav_with_logging.py
+              run_one upwork_profile_fav_with_logging.py :99
               ;;
             without_logging)
-              run_one upwork_profile_fav_without_logging.py
+              run_one upwork_profile_fav_without_logging.py :99
               ;;
             both)
-              run_one upwork_profile_fav_with_logging.py &
+              # Completely separate processes + separate graphical displays
+              run_one upwork_profile_fav_with_logging.py :99 &
               PID1=$!
-              run_one upwork_profile_fav_without_logging.py &
+              run_one upwork_profile_fav_without_logging.py :100 &
               PID2=$!
               wait $PID1 $PID2
               ;;
