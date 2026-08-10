@@ -61,7 +61,6 @@ def smooth_human_mouse_movement(min,max):
 
 
 def setup_driver():
-    chrome_driver_manager = ChromeDriverManager().install()
     options = uc.ChromeOptions()
 
     # 🔧 Browser configuration
@@ -77,14 +76,14 @@ def setup_driver():
     options.add_argument("--log-level=3")
     options.add_argument("--remote-debugging-port=9222")
 
-    # 🚀 Performance tuning
+    # Performance tuning
     options.add_argument("--disable-background-timer-throttling")
     options.add_argument("--disable-backgrounding-occluded-windows")
     options.add_argument("--disable-ipc-flooding-protection")
     options.add_argument("--enable-features=NetworkService,NetworkServiceInProcess")
     options.add_argument("--disable-renderer-backgrounding")
 
-    # 🎭 Random User-Agent
+    # Random User-Agent
     user_agents = [
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
@@ -93,29 +92,33 @@ def setup_driver():
     ]
     options.add_argument(f"user-agent={random.choice(user_agents)}")
 
-    # 🧠 Enable DevTools logs (optional, for debugging network requests)
-    caps = DesiredCapabilities.CHROME
-    caps["goog:loggingPrefs"] = {"performance": "ALL"}
-
-    # 🚘 Start the driver
+    # ── Key change: let undetected-chromedriver auto-match the installed Chrome ──
     driver = uc.Chrome(
         options=options,
-        desired_capabilities=caps,
         use_subprocess=True,
-        driver_executable_path=chrome_driver_manager
+        version_main=None,          # auto-detect
+        driver_executable_path=None # let it download the correct one
     )
 
-    # 🛑 Block slow third-party domains
+    # Block slow resources
     driver.execute_cdp_cmd("Network.enable", {})
     driver.execute_cdp_cmd("Network.setBlockedURLs", {
         "urls": [
-            "*.jpg", "*.jpeg", "*.png", "*.gif", "*.webp", "*.svg", "*.woff", "*.woff2", "*.ttf", "*.ico",
+            "*.jpg", "*.jpeg", "*.png", "*.gif", "*.webp", "*.svg",
+            "*.woff", "*.woff2", "*.ttf", "*.ico",
             "*tiktok.com/*",
             "*googletagmanager.com/*",
             "*doubleclick.net/*",
             "*facebook.net/*"
         ]
     })
+
+    # Force window size to match your local resolution
+    try:
+        driver.set_window_size(1600, 900)
+        driver.set_window_position(0, 0)
+    except:
+        pass
 
     return driver
 
