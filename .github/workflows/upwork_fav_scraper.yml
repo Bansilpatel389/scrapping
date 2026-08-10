@@ -227,26 +227,36 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Install system dependencies (Chrome + display + ssh)
+      - name: Install system dependencies (Chrome + ChromeDriver + display + ssh)
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             xvfb x11-utils libgtk-3-0 libnss3 libxss1 libasound2 \
             fonts-liberation libappindicator3-1 libu2f-udev libvulkan1 \
-            wget gnupg ca-certificates unzip openssh-client
+            wget gnupg ca-certificates unzip openssh-client jq
 
           # Install Google Chrome
           wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
           sudo apt-get install -y /tmp/chrome.deb || true
-
-          # Show the exact Chrome version
           google-chrome --version
 
-          # Force undetected-chromedriver / webdriver-manager to use the matching driver
-          # (this is the important part)
+          # Get the exact major version
           CHROME_VERSION=$(google-chrome --version | grep -oP '\d+\.\d+\.\d+\.\d+' | head -1)
-          echo "Detected Chrome version: $CHROME_VERSION"
-          echo "CHROME_VERSION=$CHROME_VERSION" >> $GITHUB_ENV
+          CHROME_MAJOR=$(echo $CHROME_VERSION | cut -d. -f1)
+          echo "Chrome version: $CHROME_VERSION (major $CHROME_MAJOR)"
+
+          # Download matching ChromeDriver from Chrome for Testing
+          DRIVER_URL=$(curl -s "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json" \
+            | jq -r ".channels.Stable.downloads.chromedriver[] | select(.platform==\"linux64\") | .url")
+
+          echo "Downloading ChromeDriver from: $DRIVER_URL"
+          wget -q -O /tmp/chromedriver.zip "$DRIVER_URL"
+          unzip -o /tmp/chromedriver.zip -d /tmp/
+          sudo mv /tmp/chromedriver-linux64/chromedriver /usr/local/bin/chromedriver
+          sudo chmod +x /usr/local/bin/chromedriver
+          chromedriver --version
+
+          echo "CHROME_MAJOR=$CHROME_MAJOR" >> $GITHUB_ENV
           
       - name: Install Python dependencies
         run: |

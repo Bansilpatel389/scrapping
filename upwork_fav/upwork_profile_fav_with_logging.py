@@ -61,7 +61,7 @@ def smooth_human_mouse_movement(min,max):
 def setup_driver():
     options = uc.ChromeOptions()
 
-    # 🔧 Browser configuration
+    # Browser configuration
     options.add_argument("--start-maximized")
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("--no-sandbox")
@@ -72,9 +72,9 @@ def setup_driver():
     options.add_argument("--disable-popup-blocking")
     options.add_argument("--disable-logging")
     options.add_argument("--log-level=3")
-    options.add_argument("--remote-debugging-port=9222")
+    options.add_argument("--remote-debugging-port=0")   # let it choose a free port
 
-    # Performance tuning
+    # Performance
     options.add_argument("--disable-background-timer-throttling")
     options.add_argument("--disable-backgrounding-occluded-windows")
     options.add_argument("--disable-ipc-flooding-protection")
@@ -90,28 +90,32 @@ def setup_driver():
     ]
     options.add_argument(f"user-agent={random.choice(user_agents)}")
 
-    # ── Key change: let undetected-chromedriver auto-match the installed Chrome ──
+    # Use the ChromeDriver we installed in the workflow
     driver = uc.Chrome(
         options=options,
+        driver_executable_path="/usr/local/bin/chromedriver",
+        browser_executable_path="/usr/bin/google-chrome",
         use_subprocess=True,
-        version_main=None,          # auto-detect
-        driver_executable_path=None # let it download the correct one
+        version_main=None
     )
 
-    # Block slow resources
-    driver.execute_cdp_cmd("Network.enable", {})
-    driver.execute_cdp_cmd("Network.setBlockedURLs", {
-        "urls": [
-            "*.jpg", "*.jpeg", "*.png", "*.gif", "*.webp", "*.svg",
-            "*.woff", "*.woff2", "*.ttf", "*.ico",
-            "*tiktok.com/*",
-            "*googletagmanager.com/*",
-            "*doubleclick.net/*",
-            "*facebook.net/*"
-        ]
-    })
+    # Block heavy resources
+    try:
+        driver.execute_cdp_cmd("Network.enable", {})
+        driver.execute_cdp_cmd("Network.setBlockedURLs", {
+            "urls": [
+                "*.jpg", "*.jpeg", "*.png", "*.gif", "*.webp", "*.svg",
+                "*.woff", "*.woff2", "*.ttf", "*.ico",
+                "*tiktok.com/*",
+                "*googletagmanager.com/*",
+                "*doubleclick.net/*",
+                "*facebook.net/*"
+            ]
+        })
+    except:
+        pass
 
-    # Force window size to match your local resolution
+    # Match your local resolution
     try:
         driver.set_window_size(1600, 900)
         driver.set_window_position(0, 0)
@@ -119,7 +123,6 @@ def setup_driver():
         pass
 
     return driver
-
 def driver_get(url):
     driver.get(url)
     try :
