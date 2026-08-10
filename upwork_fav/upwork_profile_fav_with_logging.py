@@ -585,6 +585,7 @@ try :
             hourly_ids = fetch_hourly_ids()
             print('Hourly Update ids :',len(hourly_ids))
             if len(hourly_ids) == 0 and len(daily_ids) == 0:
+                break
                 if is_night_time(now):
                     print('night')
                     # driver.quit()
