@@ -257,7 +257,7 @@ jobs:
           chromedriver --version
 
           echo "CHROME_MAJOR=$CHROME_MAJOR" >> $GITHUB_ENV
-          
+
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip setuptools wheel
@@ -270,21 +270,47 @@ jobs:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
         run: |
+          set -x   # print every command for debugging
+
           mkdir -p ~/.ssh
           echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -H $SSH_HOST >> ~/.ssh/known_hosts
 
-          # Start SSH tunnel in background: local 3307 → remote 127.0.0.1:3306
-          ssh -f -N -o StrictHostKeyChecking=no \
+          # Make sure the key looks correct
+          echo "Private key fingerprint:"
+          ssh-keygen -lf ~/.ssh/id_ed25519 || true
+
+          # Add host key
+          ssh-keyscan -H $SSH_HOST >> ~/.ssh/known_hosts 2>/dev/null || true
+
+          # Test plain SSH connection first
+          echo "Testing SSH connection..."
+          ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
+              -i ~/.ssh/id_ed25519 \
+              ${SSH_USER}@${SSH_HOST} "echo 'SSH connection successful'" || {
+            echo "❌ SSH connection failed"
+            exit 1
+          }
+
+          # Start the tunnel
+          echo "Starting SSH tunnel..."
+          ssh -f -N -o StrictHostKeyChecking=no -o ExitOnForwardFailure=yes \
               -L 3307:127.0.0.1:3306 \
               -i ~/.ssh/id_ed25519 \
               ${SSH_USER}@${SSH_HOST}
 
-          # Wait a moment and test the tunnel
-          sleep 3
-          nc -zv 127.0.0.1 3307 || (echo "Tunnel failed!" && exit 1)
-          echo "✅ SSH tunnel is up on localhost:3307"
+          sleep 4
+
+          # Test the tunnel
+          echo "Testing tunnel..."
+          if nc -zv 127.0.0.1 3307; then
+            echo "✅ SSH tunnel is up on localhost:3307"
+          else
+            echo "❌ Tunnel test failed"
+            # Show any running ssh processes
+            ps aux | grep ssh || true
+            exit 1
+          fi
 
       - name: Show chosen parameters
         run: |
