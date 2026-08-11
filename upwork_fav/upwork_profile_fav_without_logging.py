@@ -202,7 +202,7 @@ def driver_get(url):
                     i = 1
                 else : 
                     i += 1
-                test = y + (i * 1)
+                test = y + (i * 0)
                 print(test)
                 pyautogui.moveTo(x,test, duration=2) # You need to give position 
                 time_module.sleep(1)
