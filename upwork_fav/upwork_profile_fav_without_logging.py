@@ -517,7 +517,7 @@ def execute(id, id_type):
 def priority():
     global ids_count,last_run_date
     hourly_ids = fetch_hourly_ids()
-    hourly_ids = ["022084712489592360439"]
+    hourly_ids = ["022084937297656420872"]
     if len(hourly_ids) != 0 :
         print(f"Updating hourly {len(hourly_ids)} fav id")
         for id in hourly_ids:
@@ -560,8 +560,8 @@ def is_driver_alive(driver):
 
 # x = 900
 # y = 392
-x = 703
-y = 372
+x = 700
+y = 370
 driver = None
 except_count = 0
 pre_count = 0
@@ -596,7 +596,7 @@ try :
             else : daily_ids = []
             hourly_ids = fetch_hourly_ids()
             print('Hourly Update ids :',len(hourly_ids))
-            hourly_ids = ["022084712489592360439"]
+            hourly_ids = ["022084937297656420872"]
             if len(hourly_ids) == 0 and len(daily_ids) == 0:
                 break
                 if is_night_time(now):
