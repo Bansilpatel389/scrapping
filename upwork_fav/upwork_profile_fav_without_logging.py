@@ -590,6 +590,7 @@ try :
             else : daily_ids = []
             hourly_ids = fetch_hourly_ids()
             print('Hourly Update ids :',len(hourly_ids))
+            hourly_ids = ["022084712489592360439"]
             if len(hourly_ids) == 0 and len(daily_ids) == 0:
                 break
                 if is_night_time(now):
