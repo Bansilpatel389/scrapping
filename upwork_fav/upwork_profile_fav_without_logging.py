@@ -189,6 +189,8 @@ def setup_driver():
 
 def driver_get(url):
     driver.get(url)
+    screen_w, screen_h = pyautogui.size()
+    print(f"Screen size detected by pyautogui: {screen_w} x {screen_h}")
     try :
         element = driver.title
         count = 1
