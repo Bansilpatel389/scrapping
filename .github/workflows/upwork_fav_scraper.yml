@@ -142,26 +142,25 @@ jobs:
           run_one () {
             local script=$1
             local display=$2
-
             echo "===== Starting $script on DISPLAY=$display ====="
-
-            # Start dedicated Xvfb
-            Xvfb $display -screen 0 1920x1080x24 -ac +extension GLX +render -noreset &
+            
+            # Start dedicated Xvfb at 1600x900
+            Xvfb $display -screen 0 1600x900x24 -ac +extension GLX +render -noreset &
             local xvfb_pid=$!
             sleep 3
-
-            # Generate Xauthority cookie for this display (reduces Xlib warnings)
+            
+            # Generate Xauthority cookie for this display
             xauth generate $display . trusted 2>/dev/null || true
-
+            
             # Run the script
             DISPLAY=$display XAUTHORITY=$HOME/.Xauthority \
-              timeout --foreground --signal=TERM --kill-after=30s ${RUNTIME_SECONDS}s \
-              python -u "$script" || true
-
+                timeout --foreground --signal=TERM --kill-after=30s ${RUNTIME_SECONDS}s \
+                python -u "$script" || true
+            
             # Cleanup
             kill $xvfb_pid 2>/dev/null || true
             echo "===== Finished $script ====="
-          }
+            }
 
           case "$SCRIPT_CHOICE" in
             with_logging)
@@ -190,194 +189,3 @@ jobs:
             upwork_fav/*.pkl
           if-no-files-found: ignore
           retention-days: 7
- # v2 
-
-# name: Upwork Fav Scraper
-
-# on:
-#   workflow_dispatch:
-#     inputs:
-#       frequency:
-#         description: "How often the job should effectively run"
-#         required: true
-#         default: "daily"
-#         type: choice
-#         options:
-#           - hourly
-#           - daily
-#           - every-6-hours
-#           - once
-#       number_of_days:
-#         description: "How many days this run should keep the scraper alive"
-#         required: true
-#         default: "1"
-#         type: choice
-#         options:
-#           - "1"
-#           - "2"
-#           - "3"
-#           - "7"
-#       script_to_run:
-#         description: "Which script to execute"
-#         required: true
-#         default: "without_logging"
-#         type: choice
-#         options:
-#           - with_logging
-#           - without_logging
-#           - both
-#       max_runtime_hours:
-#         description: "Hard timeout in hours"
-#         required: true
-#         default: "6"
-#         type: choice
-#         options:
-#           - "2"
-#           - "4"
-#           - "6"
-#           - "12"
-#   schedule:
-#     - cron: "30 0 * * *"
-
-# jobs:
-#   scrape:
-#     runs-on: ubuntu-22.04
-#     timeout-minutes: 720
-
-#     steps:
-#       - name: Checkout repository
-#         uses: actions/checkout@v4
-
-#       - name: Set up Python
-#         uses: actions/setup-python@v5
-#         with:
-#           python-version: "3.11"
-#           cache: "pip"
-
-#       - name: Install system dependencies (Chrome + Xvfb + xauth)
-#         run: |
-#           sudo apt-get update
-#           sudo apt-get install -y \
-#             xvfb x11-utils xauth \
-#             libgtk-3-0 libnss3 libxss1 libasound2 \
-#             fonts-liberation libappindicator3-1 libu2f-udev libvulkan1 \
-#             wget gnupg ca-certificates unzip curl
-
-#           # Install Google Chrome
-#           wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
-#           sudo apt-get install -y /tmp/chrome.deb
-#           google-chrome --version
-
-#           # Matching chromedriver
-#           CHROME_VERSION=$(google-chrome --version | grep -oP '\d+\.\d+\.\d+\.\d+' | head -1)
-#           CHROME_MAJOR=$(echo $CHROME_VERSION | cut -d. -f1)
-#           echo "Chrome version: $CHROME_VERSION (major: $CHROME_MAJOR)"
-
-#           CHROMEDRIVER_URL="https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}/linux64/chromedriver-linux64.zip"
-#           echo "Downloading chromedriver from: $CHROMEDRIVER_URL"
-#           wget -q -O /tmp/chromedriver.zip "$CHROMEDRIVER_URL" || \
-#             wget -q -O /tmp/chromedriver.zip "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_MAJOR}.0.0.0/linux64/chromedriver-linux64.zip"
-
-#           unzip -o /tmp/chromedriver.zip -d /tmp/
-#           sudo mv /tmp/chromedriver-linux64/chromedriver /usr/local/bin/chromedriver
-#           sudo chmod +x /usr/local/bin/chromedriver
-#           chromedriver --version
-
-#           # Clean old undetected_chromedriver cache
-#           rm -rf ~/.local/share/undetected_chromedriver || true
-
-#       - name: Install Python dependencies
-#         run: |
-#           python -m pip install --upgrade pip setuptools wheel
-#           pip install -r upwork_fav/requirements.txt
-#           # Force latest undetected-chromedriver
-#           pip install --upgrade --force-reinstall git+https://github.com/ultrafunkamsterdam/undetected-chromedriver@master
-#           pip install pymysql cryptography SQLAlchemy python-dotenv
-
-#       - name: Show chosen parameters
-#         run: |
-#           echo "Frequency        : ${{ github.event.inputs.frequency || 'daily (schedule)' }}"
-#           echo "Number of days   : ${{ github.event.inputs.number_of_days || '1' }}"
-#           echo "Script to run    : ${{ github.event.inputs.script_to_run || 'without_logging' }}"
-#           echo "Max runtime (h)  : ${{ github.event.inputs.max_runtime_hours || '6' }}"
-
-#       - name: Run scraper under Xvfb
-#         env:
-#           MYSQL_HOST: ${{ secrets.MYSQL_HOST }}
-#           MYSQL_PORT: ${{ secrets.MYSQL_PORT }}
-#           MYSQL_USER: ${{ secrets.MYSQL_USER }}
-#           MYSQL_PASS: ${{ secrets.MYSQL_PASS }}
-#           MYSQL_DB: ${{ secrets.MYSQL_DB }}
-#           MYSQL_PASSWORD: ${{ secrets.MYSQL_PASS }}
-#           MYSQL_DATABASE: ${{ secrets.MYSQL_DB }}
-#           PYTHONUNBUFFERED: "1"
-#         run: |
-#           touch $HOME/.Xauthority
-#           chmod 600 $HOME/.Xauthority
-
-#           SCRIPT_CHOICE="${{ github.event.inputs.script_to_run || 'without_logging' }}"
-#           MAX_HOURS="${{ github.event.inputs.max_runtime_hours || '6' }}"
-#           DAYS="${{ github.event.inputs.number_of_days || '1' }}"
-
-#           RUNTIME_SECONDS=$(( DAYS * 24 * 3600 ))
-#           MAX_SECONDS=$(( MAX_HOURS * 3600 ))
-#           if [ $RUNTIME_SECONDS -gt $MAX_SECONDS ]; then
-#             RUNTIME_SECONDS=$MAX_SECONDS
-#           fi
-
-#           echo "Will run for up to ${RUNTIME_SECONDS} seconds"
-#           echo "MySQL Host: $MYSQL_HOST"
-#           echo "MySQL DB  : $MYSQL_DB"
-
-#           cd upwork_fav
-
-#           run_one () {
-#             local script=$1
-#             local display=$2
-
-#             echo "===== Starting $script on DISPLAY=$display ====="
-
-#             # Matching resolution with the script (1600x900)
-#             Xvfb $display -screen 0 1600x900x24 -ac +extension GLX +render -noreset &
-#             local xvfb_pid=$!
-#             sleep 4
-
-#             xauth generate $display . trusted 2>/dev/null || true
-
-#             DISPLAY=$display XAUTHORITY=$HOME/.Xauthority \
-#               timeout --foreground --signal=TERM --kill-after=30s ${RUNTIME_SECONDS}s \
-#               python -u "$script" || true
-
-#             kill $xvfb_pid 2>/dev/null || true
-#             echo "===== Finished $script ====="
-#           }
-
-#           case "$SCRIPT_CHOICE" in
-#             with_logging)
-#               run_one upwork_profile_fav_with_logging.py :99
-#               ;;
-#             without_logging)
-#               run_one upwork_profile_fav_without_logging.py :99
-#               ;;
-#             both)
-#               run_one upwork_profile_fav_with_logging.py :99 &
-#               PID1=$!
-#               run_one upwork_profile_fav_without_logging.py :100 &
-#               PID2=$!
-#               wait $PID1 $PID2
-#               ;;
-#           esac
-
-#       - name: Upload logs / artifacts
-#         if: always()
-#         uses: actions/upload-artifact@v4
-#         with:
-#           name: scraper-logs-${{ github.run_id }}
-#           path: |
-#             upwork_fav/*.log
-#             upwork_fav/*.json
-#             upwork_fav/*.pkl
-#           if-no-files-found: ignore
-#           retention-days: 7
-
-# test
