@@ -187,79 +187,40 @@ def setup_driver():
 
     return driver
 
-# def driver_get(url):
-#     driver.get(url)
-#     try :
-#         element = driver.title
-#         count = 1
-#         i = 0
-#         while "just a moment" in element.lower() :
-#             smooth_human_mouse_movement(1,1)
-#             try:
-#                 if i % 4 == 0:
-#                     i = 1
-#                 else : 
-#                     i += 1
-#                 test = y + (i * 8)
-#                 print(test)
-#                 pyautogui.moveTo(x,test, duration=2) # You need to give position 
-#                 time_module.sleep(1)
-#                 pyautogui.click()
-#                 print('clicked')
-#                 smooth_human_mouse_movement(1,1)
-#             except :
-#                 pass
-#             finally :
-#                 element = driver.title
-#                 if count % 2 == 0:
-#                     driver.refresh()
-#                     time_module.sleep(0.3)
-#                 count+=1
-
-#     except Exception as e: 
-#         print(e)
-#     time_module.sleep(2.5)
-
 def driver_get(url):
     driver.get(url)
-    time_module.sleep(3)
+    try :
+        element = driver.title
+        count = 1
+        i = 0
+        while "just a moment" in element.lower() :
+            smooth_human_mouse_movement(1,1)
+            try:
+                if i % 4 == 0:
+                    i = 1
+                else : 
+                    i += 1
+                test = y + (i * 2)
+                print(test)
+                pyautogui.moveTo(x,test, duration=2) # You need to give position 
+                time_module.sleep(1)
+                pyautogui.click()
+                print('clicked')
+                smooth_human_mouse_movement(1,1)
+            except :
+                pass
+            finally :
+                element = driver.title
+                if count % 2 == 0:
+                    driver.refresh()
+                    time_module.sleep(0.3)
+                count+=1
 
-    try:
-        title = driver.title.lower()
-        count = 0
+    except Exception as e: 
+        print(e)
+    time_module.sleep(2.5)
 
-        while "just a moment" in title and count < 12:
-            print(f"Cloudflare detected... attempt {count + 1}")
 
-            # Human-like mouse movement
-            smooth_human_mouse_movement(1, 2)
-
-            # Click near the Cloudflare checkbox (adjust x,y if needed)
-            pyautogui.moveTo(x, y, duration=random.uniform(0.4, 0.8))
-            time_module.sleep(random.uniform(0.3, 0.6))
-            pyautogui.click()
-            print(f"Clicked at ({x}, {y})")
-
-            # Sometimes Cloudflare needs a second click a bit lower
-            time_module.sleep(1.5)
-            pyautogui.moveTo(x, y + 25, duration=0.3)
-            pyautogui.click()
-
-            time_module.sleep(random.uniform(2.5, 4))
-
-            title = driver.title.lower()
-            count += 1
-
-            if count % 3 == 0:
-                print("Refreshing page...")
-                driver.refresh()
-                time_module.sleep(3)
-
-    except Exception as e:
-        print("Error in driver_get:", e)
-
-    time_module.sleep(2)
-    
 def convert_to_json(dict_data):
     return json.dumps(dict_data, indent=4)
 
