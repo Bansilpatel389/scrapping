@@ -9,12 +9,3 @@ pymysql
 cryptography
 SQLAlchemy
 python-dotenv
-
-seleniumbase>=4.41.0
-mysql-connector-python
-pymysql
-cryptography
-python-dotenv
-numpy
-pyautogui
-beautifulsoup4
