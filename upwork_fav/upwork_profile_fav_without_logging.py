@@ -60,6 +60,72 @@ def smooth_human_mouse_movement(min,max):
                 time_module.sleep(random.uniform(0.1, 0.3))
 
 
+# def setup_driver():
+#     options = uc.ChromeOptions()
+
+#     # Browser configuration
+#     options.add_argument("--start-maximized")
+#     options.add_argument("--disable-blink-features=AutomationControlled")
+#     options.add_argument("--no-sandbox")
+#     options.add_argument("--disable-dev-shm-usage")
+#     options.add_argument("--disable-gpu")
+#     options.add_argument("--disable-infobars")
+#     options.add_argument("--disable-extensions")
+#     options.add_argument("--disable-popup-blocking")
+#     options.add_argument("--disable-logging")
+#     options.add_argument("--log-level=3")
+#     options.add_argument("--remote-debugging-port=0")   # let it choose a free port
+
+#     # Performance
+#     options.add_argument("--disable-background-timer-throttling")
+#     options.add_argument("--disable-backgrounding-occluded-windows")
+#     options.add_argument("--disable-ipc-flooding-protection")
+#     options.add_argument("--enable-features=NetworkService,NetworkServiceInProcess")
+#     options.add_argument("--disable-renderer-backgrounding")
+
+#     # Random User-Agent
+#     user_agents = [
+#         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+#         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+#         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+#         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+#     ]
+#     options.add_argument(f"user-agent={random.choice(user_agents)}")
+
+#     # Use the ChromeDriver we installed in the workflow
+#     driver = uc.Chrome(
+#         options=options,
+#         driver_executable_path="/usr/local/bin/chromedriver",
+#         browser_executable_path="/usr/bin/google-chrome",
+#         use_subprocess=True,
+#         version_main=None
+#     )
+
+#     # Block heavy resources
+#     try:
+#         driver.execute_cdp_cmd("Network.enable", {})
+#         driver.execute_cdp_cmd("Network.setBlockedURLs", {
+#             "urls": [
+#                 "*.jpg", "*.jpeg", "*.png", "*.gif", "*.webp", "*.svg",
+#                 "*.woff", "*.woff2", "*.ttf", "*.ico",
+#                 "*tiktok.com/*",
+#                 "*googletagmanager.com/*",
+#                 "*doubleclick.net/*",
+#                 "*facebook.net/*"
+#             ]
+#         })
+#     except:
+#         pass
+
+#     # Match your local resolution
+#     try:
+#         driver.set_window_size(1600, 900)
+#         driver.set_window_position(0, 0)
+#     except:
+#         pass
+
+#     return driver
+
 def setup_driver():
     options = uc.ChromeOptions()
 
@@ -74,7 +140,7 @@ def setup_driver():
     options.add_argument("--disable-popup-blocking")
     options.add_argument("--disable-logging")
     options.add_argument("--log-level=3")
-    options.add_argument("--remote-debugging-port=0")   # let it choose a free port
+    options.add_argument("--remote-debugging-port=0")
 
     # Performance
     options.add_argument("--disable-background-timer-throttling")
@@ -92,13 +158,16 @@ def setup_driver():
     ]
     options.add_argument(f"user-agent={random.choice(user_agents)}")
 
-    # Use the ChromeDriver we installed in the workflow
+    # ---- Key change: do NOT hard-code /usr/local/bin/chromedriver ----
+    # Let undetected_chromedriver download + patch a matching chromedriver
+    # into a writable location (it handles this automatically).
+
     driver = uc.Chrome(
         options=options,
-        driver_executable_path="/usr/local/bin/chromedriver",
-        browser_executable_path="/usr/bin/google-chrome",
+        browser_executable_path="/usr/bin/google-chrome",   # keep this
         use_subprocess=True,
-        version_main=None
+        version_main=None,          # auto-detect Chrome major version
+        # driver_executable_path=...  ← removed on purpose
     )
 
     # Block heavy resources
@@ -114,17 +183,18 @@ def setup_driver():
                 "*facebook.net/*"
             ]
         })
-    except:
+    except Exception:
         pass
 
     # Match your local resolution
     try:
         driver.set_window_size(1600, 900)
         driver.set_window_position(0, 0)
-    except:
+    except Exception:
         pass
 
     return driver
+
 def driver_get(url):
     driver.get(url)
     try :

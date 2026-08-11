@@ -61,17 +61,23 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Install system dependencies (Chrome + display)
+      - name: Install system dependencies (Chrome + Xvfb + xauth)
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            xvfb x11-utils libgtk-3-0 libnss3 libxss1 libasound2 \
+            xvfb x11-utils xauth \
+            libgtk-3-0 libnss3 libxss1 libasound2 \
             fonts-liberation libappindicator3-1 libu2f-udev libvulkan1 \
-            wget gnupg ca-certificates unzip
+            wget gnupg ca-certificates unzip curl
 
+          # Install Google Chrome
           wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
-          sudo apt-get install -y /tmp/chrome.deb || true
-          google-chrome --version || true
+          sudo apt-get install -y /tmp/chrome.deb
+          google-chrome --version
+
+          # Make sure /usr/local/bin is writable (helps undetected_chromedriver)
+          sudo mkdir -p /usr/local/bin
+          sudo chmod 777 /usr/local/bin
 
       - name: Install Python dependencies
         run: |
@@ -97,7 +103,7 @@ jobs:
           MYSQL_DATABASE: ${{ secrets.MYSQL_DB }}
           PYTHONUNBUFFERED: "1"
         run: |
-          # Create Xauthority file (fixes pyautogui error)
+          # Create proper Xauthority
           touch $HOME/.Xauthority
           chmod 600 $HOME/.Xauthority
 
@@ -120,18 +126,23 @@ jobs:
           run_one () {
             local script=$1
             local display=$2
+
             echo "===== Starting $script on DISPLAY=$display ====="
 
-            # Start a dedicated Xvfb for this script
+            # Start dedicated Xvfb
             Xvfb $display -screen 0 1920x1080x24 -ac +extension GLX +render -noreset &
             local xvfb_pid=$!
-            sleep 2
+            sleep 3
 
-            # Run the script with its own DISPLAY
-            DISPLAY=$display timeout --foreground --signal=TERM --kill-after=30s ${RUNTIME_SECONDS}s \
+            # Generate Xauthority cookie for this display (reduces Xlib warnings)
+            xauth generate $display . trusted 2>/dev/null || true
+
+            # Run the script
+            DISPLAY=$display XAUTHORITY=$HOME/.Xauthority \
+              timeout --foreground --signal=TERM --kill-after=30s ${RUNTIME_SECONDS}s \
               python -u "$script" || true
 
-            # Kill the dedicated Xvfb
+            # Cleanup
             kill $xvfb_pid 2>/dev/null || true
             echo "===== Finished $script ====="
           }
@@ -144,7 +155,6 @@ jobs:
               run_one upwork_profile_fav_without_logging.py :99
               ;;
             both)
-              # Completely separate processes + separate graphical displays
               run_one upwork_profile_fav_with_logging.py :99 &
               PID1=$!
               run_one upwork_profile_fav_without_logging.py :100 &
@@ -161,9 +171,11 @@ jobs:
           path: |
             upwork_fav/*.log
             upwork_fav/*.json
+            upwork_fav/*.pkl
           if-no-files-found: ignore
           retention-days: 7
 
+          
 # name: Upwork Fav Scraper
 
 # on:
