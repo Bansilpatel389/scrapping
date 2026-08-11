@@ -1,11 +1,19 @@
-beautifulsoup4
-numpy
-pyautogui
+# beautifulsoup4
+# numpy
+# pyautogui
+# mysql-connector-python
+# undetected-chromedriver
+# selenium
+# webdriver-manager
+# pymysql
+# cryptography
+# SQLAlchemy
+# python-dotenv
+seleniumbase>=4.41.0
 mysql-connector-python
-undetected-chromedriver
-selenium
-webdriver-manager
 pymysql
 cryptography
-SQLAlchemy
 python-dotenv
+numpy
+pyautogui
+beautifulsoup4
