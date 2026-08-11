@@ -497,6 +497,8 @@ y = 392
 driver = None
 except_count = 0
 pre_count = 0
+print("User : ",os.getenv("MYSQL_USER", "scraper"))
+print("Pass : ",os.getenv("MYSQL_PASS") or os.getenv("MYSQL_PASSWORD", ""))
 conn = mysql.connector.connect(
     host=os.getenv("MYSQL_HOST", "2.24.198.101"),
     port=int(os.getenv("MYSQL_PORT", "3306")),
