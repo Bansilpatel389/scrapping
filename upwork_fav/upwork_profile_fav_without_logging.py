@@ -560,8 +560,8 @@ def is_driver_alive(driver):
 
 # x = 900
 # y = 392
-x = 700
-y = 370
+x = 710
+y = 375
 driver = None
 except_count = 0
 pre_count = 0
