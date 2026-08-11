@@ -514,6 +514,7 @@ def execute(id, id_type):
 def priority():
     global ids_count,last_run_date
     hourly_ids = fetch_hourly_ids()
+    hourly_ids = ["022084712489592360439"]
     if len(hourly_ids) != 0 :
         print(f"Updating hourly {len(hourly_ids)} fav id")
         for id in hourly_ids:
