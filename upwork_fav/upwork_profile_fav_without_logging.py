@@ -794,56 +794,115 @@ def random_page_interaction(driver):
     except Exception:
         pass
 
-def try_solve_cloudflare(driver, max_attempts=10):
+def is_challenge_page(driver):
+    title = (driver.title or "").lower()
+    if any(x in title for x in ["just a moment", "checking your browser", "attention required"]):
+        return True
+    try:
+        src = driver.page_source.lower()
+        if "cf-browser-verification" in src or "challenges.cloudflare.com" in src or "cdn-cgi/challenge-platform" in src:
+            return True
+    except Exception:
+        pass
+    return False
+
+def try_solve_cloudflare(driver, max_attempts=12):
     """
-    Attempt to pass Cloudflare 'Just a moment' / Turnstile challenge.
-    Returns True if challenge is gone.
+    Improved Cloudflare handler.
+    Strategy:
+      1. Passive wait first (non-interactive challenges often solve themselves)
+      2. Then try interactive clicks
+      3. Occasional refresh
     """
+    print("[CF] Starting challenge solver...")
+
+    # ---------- Phase 1: Passive wait (very important) ----------
+    for i in range(8):
+        if not is_challenge_page(driver):
+            print("[CF] Challenge cleared during passive wait")
+            return True
+        print(f"[CF] Passive wait {i+1}/8 ...")
+        time_module.sleep(random.uniform(1.8, 3.2))
+        # light human activity
+        try:
+            driver.execute_script("window.scrollBy(0, arguments[0]);", random.randint(-60, 120))
+        except Exception:
+            pass
+
+    # ---------- Phase 2: Interactive attempts ----------
     for attempt in range(1, max_attempts + 1):
-        title = (driver.title or "").lower()
-        if "just a moment" not in title and "checking your browser" not in title:
+        if not is_challenge_page(driver):
+            print("[CF] Challenge cleared")
             return True
 
-        print(f"[CF] Attempt {attempt}/{max_attempts} – still on challenge page")
+        print(f"[CF] Interactive attempt {attempt}/{max_attempts}")
 
-        # 1. Try common Cloudflare / Turnstile selectors
+        # Debug info (helps us understand what CF is serving)
+        try:
+            print(f"[CF] Title: {driver.title}")
+            # print a small snippet of the body
+            body_text = driver.find_element(By.TAG_NAME, "body").text[:300]
+            print(f"[CF] Body snippet: {body_text[:200]}...")
+        except Exception:
+            pass
+
+        clicked = False
+
+        # Strategy A: common selectors (including newer ones)
         selectors = [
             "iframe[src*='challenges.cloudflare.com']",
             "iframe[src*='turnstile']",
+            "iframe[title*='Cloudflare']",
+            "iframe[title*='Widget containing']",
             ".cf-turnstile",
             "#challenge-form",
+            "#challenge-stage",
             "div[id*='cf-']",
             "input[type='checkbox']",
             "label.cb-lb",
-            "#challenge-stage",
+            "[data-ray]",
         ]
 
-        clicked = False
         for sel in selectors:
             try:
-                elements = driver.find_elements(By.CSS_SELECTOR, sel)
-                for el in elements:
-                    if el.is_displayed():
-                        # If it's an iframe, try switching into it
-                        if el.tag_name.lower() == "iframe":
+                els = driver.find_elements(By.CSS_SELECTOR, sel)
+                for el in els:
+                    if not el.is_displayed():
+                        continue
+
+                    if el.tag_name.lower() == "iframe":
+                        try:
+                            driver.switch_to.frame(el)
+                            # look inside iframe
+                            for inner_sel in [
+                                "input[type='checkbox']",
+                                ".cf-turnstile",
+                                "label",
+                                "#challenge-stage",
+                                "div",
+                            ]:
+                                inners = driver.find_elements(By.CSS_SELECTOR, inner_sel)
+                                for inner in inners:
+                                    if inner.is_displayed():
+                                        human_click_element(driver, inner)
+                                        clicked = True
+                                        print(f"[CF] Clicked inside iframe via {inner_sel}")
+                                        break
+                                if clicked:
+                                    break
+                            driver.switch_to.default_content()
+                        except Exception as e:
                             try:
-                                driver.switch_to.frame(el)
-                                # look for checkbox inside iframe
-                                for inner_sel in ["input[type='checkbox']", ".cf-turnstile", "label"]:
-                                    inners = driver.find_elements(By.CSS_SELECTOR, inner_sel)
-                                    for inner in inners:
-                                        if inner.is_displayed():
-                                            human_click_element(driver, inner)
-                                            clicked = True
-                                            break
                                 driver.switch_to.default_content()
                             except Exception:
-                                driver.switch_to.default_content()
-                        else:
-                            human_click_element(driver, el)
-                            clicked = True
-                        if clicked:
-                            break
+                                pass
+                    else:
+                        human_click_element(driver, el)
+                        clicked = True
+                        print(f"[CF] Clicked element: {sel}")
+
+                    if clicked:
+                        break
                 if clicked:
                     break
             except Exception:
@@ -852,38 +911,46 @@ def try_solve_cloudflare(driver, max_attempts=10):
                 except Exception:
                     pass
 
-        # 2. Always do some random human interaction
+        # Strategy B: random page interaction + OS mouse
         smooth_human_mouse_movement(1, 2)
         random_page_interaction(driver)
 
-        # 3. Occasional refresh (not every time)
-        if attempt % 3 == 0:
-            print("[CF] Refreshing page...")
+        # Strategy C: occasional refresh
+        if attempt % 4 == 0:
+            print("[CF] Refreshing...")
             driver.refresh()
-            time_module.sleep(random.uniform(2.5, 4.0))
+            time_module.sleep(random.uniform(3.0, 5.0))
 
-        time_module.sleep(random.uniform(2.0, 4.5))
+        time_module.sleep(random.uniform(2.5, 4.5))
 
     # Final check
-    title = (driver.title or "").lower()
-    return "just a moment" not in title and "checking your browser" not in title
+    success = not is_challenge_page(driver)
+    print(f"[CF] Final result: {'SUCCESS' if success else 'FAILED'}")
+    return success
 
 def driver_get(url):
     driver.get(url)
-    time_module.sleep(random.uniform(1.5, 2.8))
+    time_module.sleep(random.uniform(2.0, 3.5))
 
     try:
-        # Give the challenge a moment to appear
-        time_module.sleep(1.2)
-
-        if not try_solve_cloudflare(driver, max_attempts=9):
-            print("[CF] Could not solve challenge after max attempts")
-            # still continue – sometimes the page loads later
+        if is_challenge_page(driver):
+            if not try_solve_cloudflare(driver, max_attempts=10):
+                print("[CF] Could not clear challenge")
+                # Optional: save screenshot / page source for debugging
+                try:
+                    driver.save_screenshot("/tmp/cf_challenge.png")
+                    with open("/tmp/cf_page.html", "w", encoding="utf-8") as f:
+                        f.write(driver.page_source)
+                    print("[CF] Saved /tmp/cf_challenge.png and /tmp/cf_page.html")
+                except Exception:
+                    pass
+        else:
+            print("[CF] No challenge detected")
     except Exception as e:
-        print(f"[CF] Error while handling challenge: {e}")
+        print(f"[CF] Error: {e}")
 
-    time_module.sleep(random.uniform(1.8, 3.2))
-
+    time_module.sleep(random.uniform(1.5, 2.8))
+    
 def convert_to_json(dict_data):
     return json.dumps(dict_data, indent=4)
 
