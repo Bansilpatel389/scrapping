@@ -1043,6 +1043,7 @@ def get_meta(soup: BeautifulSoup) -> dict:
         "telephone": [],
         "listed_contacts": [],
         "vertical": None,
+        "eCommerce_taxonomy" : None,
         "company_data": {},
         "google_data": {},
         "performance_data": {},
@@ -1109,6 +1110,8 @@ def get_meta(soup: BeautifulSoup) -> dict:
                         val = None
                     if "vertical" in key.lower():
                         result["vertical"] = val
+                    if "ecommerce taxonomy" in key.lower() :
+                        result["eCommerce_taxonomy"] = val
                     else:
                         result["company_data"][key] = val
             else:
@@ -1121,6 +1124,8 @@ def get_meta(soup: BeautifulSoup) -> dict:
                             val = None
                         if "vertical" in key.lower():
                             result["vertical"] = val
+                        if "ecommerce taxonomy" in key.lower() :
+                            result["eCommerce_taxonomy"] = val
                         else:
                             result["company_data"][key] = val
 
@@ -1278,7 +1283,7 @@ def main():
 
     fieldnames = [
         "domain", "company_name", "linkedin_site", "company_image", "location",
-        "telephone", "listed_contacts", "vertical", "company_data", "google_data",
+        "telephone", "listed_contacts", "vertical", "eCommerce_taxonomy", "company_data", "google_data",
         "performance_data", "social_links", "emails", "traffic_rankings",
         "technology_spend", "technology", "updated_at"
     ]
